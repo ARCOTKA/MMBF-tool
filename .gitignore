@@ -1,0 +1,7 @@
+# Ignore large data files
+*.csv
+*.duckdb
+*.xml
+
+# If you want to keep the whitelist but ignore the giant export, use:
+# !MMBF_whitelist.csv
