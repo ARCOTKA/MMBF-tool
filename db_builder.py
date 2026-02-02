@@ -6,10 +6,10 @@ import os
 # --- CONFIGURATION (PORTABLE PATHS) ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-CSV_INPUT = os.path.join(BASE_DIR, 'all_units_oct_to_jan_export.csv')
+CSV_INPUT = os.path.join(BASE_DIR, 'RMG_units_jan_feb_export.csv')
 XML_INPUT = os.path.join(BASE_DIR, 'alarmlist.xml')
 WHITELIST_INPUT = os.path.join(BASE_DIR, 'MMbf_whitelist.csv')
-DB_OUTPUT = os.path.join(BASE_DIR, 'alarm_logs3.duckdb')
+DB_OUTPUT = os.path.join(BASE_DIR, 'alarm_logs2.duckdb')
 
 
 def parse_alarm_xml(xml_file):

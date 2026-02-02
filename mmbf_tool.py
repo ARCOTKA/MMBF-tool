@@ -1,6 +1,6 @@
 """
 Forensic analysis tool for RMG Fleet (RMG01 - RMG12) maintenance logs.
-Version: 6.5 - Highlighted MMBF Faults in PDF
+Version: 6.6 - Smart Lookback & Database Fix
 """
 
 import io
@@ -16,7 +16,8 @@ from functools import lru_cache
 
 # --- CONFIGURATION (PORTABLE PATHS) ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, 'alarm_logs.duckdb')
+# [FIXED] Pointing to the correct database file verified by debug script
+DB_PATH = os.path.join(BASE_DIR, 'alarm_logs2.duckdb')
 
 CRANE_LIST = [f'RMG{str(i).zfill(2)}' for i in range(1, 13)]
 
@@ -194,8 +195,10 @@ def get_maintenance_sessions(crane_id, start_date, end_date):
         return pd.DataFrame(), {}
     whitelist = get_whitelist_indices()
     try:
+        # 1. Identify Maintenance Windows (Manual Mode)
         query = f"SELECT alarm_state, (alarm_date || ' ' || alarm_time)::TIMESTAMP as ts FROM alarm_logs WHERE unit_id ILIKE ? AND alarm_index = {MANUAL_MODE_INDEX} AND alarm_date >= ? AND alarm_date <= ? ORDER BY ts ASC"
         df_manual = con.execute(query, [crane_id, start_date, end_date]).df()
+
         windows, start_ts = [], None
         for _, row in df_manual.iterrows():
             state = str(row['alarm_state']).upper()
@@ -207,21 +210,56 @@ def get_maintenance_sessions(crane_id, start_date, end_date):
                     windows.append(
                         {'start': start_ts, 'end': row['ts'], 'duration': round(dur, 2)})
                 start_ts = None
+
+        # 2. Analyze Faults for each Window with SMART LOOKBACK
         meta_df = con.execute(
             "SELECT * FROM forensic_metadata WHERE unit_id ILIKE ?", [crane_id]).df()
         sessions, details_map = [], {}
+
+        # CONFIG: How far back to look for the "Inciting Incident"
+        LOOKBACK_LIMIT = pd.Timedelta(minutes=60)
+
         for i, w in enumerate(windows):
             sid = i + 1
             start_str = w['start'].strftime('%Y-%m-%d %H:%M:%S')
+
+            # --- Smart Lookback Logic ---
+            # Default search start is X mins before session start
+            search_start_ts = w['start'] - LOOKBACK_LIMIT
+
+            # Constraint: Do not cross into the PREVIOUS session's time
+            if i > 0:
+                prev_end = windows[i-1]['end']
+                if search_start_ts < prev_end:
+                    search_start_ts = prev_end
+
+            search_start_str = search_start_ts.strftime('%Y-%m-%d %H:%M:%S')
+            end_str = w['end'].strftime('%Y-%m-%d %H:%M:%S')
+            # -----------------------------
+
             saved = meta_df[meta_df['session_start'] == start_str]
-            fault_query = f"SELECT alarm_index, alarm_class, description, alarm_state, (alarm_date || ' ' || alarm_time)::TIMESTAMP as ts FROM alarm_logs WHERE unit_id ILIKE ? AND ts >= ? AND ts <= ? AND (description ILIKE '%Fault%' OR description ILIKE '%Stop%' OR description ILIKE '%Failure%' OR description ILIKE '%Emergency%' OR description ILIKE '%Collision%') ORDER BY ts ASC"
-            df_faults = con.execute(
-                fault_query, [crane_id, start_str, w['end'].strftime('%Y-%m-%d %H:%M:%S')]).df()
+
+            # Query faults using the extended 'search_start_str'
+            fault_query = f"""
+                SELECT alarm_index, alarm_class, description, alarm_state, 
+                (alarm_date || ' ' || alarm_time)::TIMESTAMP as ts 
+                FROM alarm_logs 
+                WHERE unit_id ILIKE ? 
+                AND ts >= '{search_start_str}' AND ts <= '{end_str}' 
+                AND (description ILIKE '%Fault%' OR description ILIKE '%Stop%' OR description ILIKE '%Failure%' OR description ILIKE '%Emergency%' OR description ILIKE '%Collision%') 
+                ORDER BY ts ASC
+            """
+            df_faults = con.execute(fault_query, [crane_id]).df()
+
             if not df_faults.empty:
                 summary = []
                 for desc in df_faults['description'].unique():
                     f_events = df_faults[df_faults['description'] == desc].sort_values(
                         'ts')
+
+                    # Capture the earliest occurrence in our smart window
+                    first_occurrence_ts = f_events['ts'].min()
+
                     occ, dur_sec, on_time = 0, 0, None
                     for _, evt in f_events.iterrows():
                         st = str(evt['alarm_state']).upper()
@@ -233,22 +271,50 @@ def get_maintenance_sessions(crane_id, start_date, end_date):
                             on_time = None
                     if on_time is not None:
                         dur_sec += (w['end'] - on_time).total_seconds()
-                    idx = int(f_events['alarm_index'].iloc[0])
-                    is_ticked = any(
-                        not saved.empty and saved.iloc[0]['is_mmbf'] and saved.iloc[0]['primary_issue'] == desc for _ in [0])
-                    summary.append({'description': desc, 'alarm_index': idx, 'alarm_class': f_events['alarm_class'].iloc[0], 'occurrence_count': occ, 'total_duration_mins': round(
-                        dur_sec / 60, 2), 'mmbf_tick': is_ticked, 'is_whitelisted': 'True' if idx in whitelist else 'False'})
-                df_sum = pd.DataFrame(summary).sort_values(
-                    'total_duration_mins', ascending=False)
-                if not saved.empty:
-                    mmbf_tag, p_issue, p_index = 'Yes' if saved.iloc[0]['is_mmbf'] else 'No', saved.iloc[
-                        0]['primary_issue'], saved.iloc[0]['primary_index']
-                else:
-                    mmbf_tag, p_issue, p_index = 'No', df_sum.iloc[0][
-                        'description'], df_sum.iloc[0]['alarm_index']
-                sessions.append({'session_id': sid, 'start_timestamp': start_str, 'end_timestamp': w['end'].strftime(
-                    '%Y-%m-%d %H:%M:%S'), 'session_duration_mins': w['duration'], 'primary_index': p_index, 'primary_issue': p_issue, 'mmbf_tag': mmbf_tag, 'is_whitelisted': 'True' if int(p_index) in whitelist else 'False'})
-                details_map[str(sid)] = df_sum.to_dict('records')
+
+                    # Only include if we actually saw an ON event (occ > 0)
+                    if occ > 0:
+                        idx = int(f_events['alarm_index'].iloc[0])
+                        is_ticked = any(
+                            not saved.empty and saved.iloc[0]['is_mmbf'] and saved.iloc[0]['primary_issue'] == desc for _ in [0])
+
+                        summary.append({
+                            'description': desc,
+                            'alarm_index': idx,
+                            'alarm_class': f_events['alarm_class'].iloc[0],
+                            'occurrence_count': occ,
+                            'total_duration_mins': round(dur_sec / 60, 2),
+                            # Format for display
+                            'first_occurrence': first_occurrence_ts.strftime('%H:%M:%S'),
+                            'mmbf_tick': is_ticked,
+                            'is_whitelisted': 'True' if idx in whitelist else 'False'
+                        })
+
+                if summary:
+                    # Sort by time so the earliest "inciting" fault is at the top
+                    df_sum = pd.DataFrame(summary).sort_values(
+                        'first_occurrence', ascending=True)
+
+                    if not saved.empty:
+                        mmbf_tag, p_issue, p_index = 'Yes' if saved.iloc[0]['is_mmbf'] else 'No', saved.iloc[
+                            0]['primary_issue'], saved.iloc[0]['primary_index']
+                    else:
+                        # Auto-guess based on the first item in our sorted list
+                        mmbf_tag, p_issue, p_index = 'No', df_sum.iloc[0][
+                            'description'], df_sum.iloc[0]['alarm_index']
+
+                    sessions.append({
+                        'session_id': sid,
+                        'start_timestamp': start_str,
+                        'end_timestamp': end_str,
+                        'session_duration_mins': w['duration'],
+                        'primary_index': p_index,
+                        'primary_issue': p_issue,
+                        'mmbf_tag': mmbf_tag,
+                        'is_whitelisted': 'True' if int(p_index) in whitelist else 'False'
+                    })
+                    details_map[str(sid)] = df_sum.to_dict('records')
+
         if con:
             con.close()
         return pd.DataFrame(sessions), details_map
@@ -265,6 +331,7 @@ def get_explorer_logs(crane_id, start_date, end_date, index_filter, desc_filter)
     if not con:
         return pd.DataFrame()
     whitelist = get_whitelist_indices()
+    # [FIXED] Retained unit_id as it was confirmed to exist in alarm_logs2.duckdb
     query = "SELECT unit_id, alarm_date, alarm_time, alarm_index, alarm_class, description, alarm_state FROM alarm_logs WHERE unit_id ILIKE ? AND alarm_date >= ? AND alarm_date <= ?"
     params = [crane_id, start_date, end_date]
     if index_filter:
@@ -389,8 +456,19 @@ def update_details(selected, session_data, details):
     if not selected or not session_data:
         return [], []
     sid = str(session_data[selected[0]]['session_id'])
-    rows, cols = details.get(sid, []), [{"name": "Idx", "id": "alarm_index"}, {"name": "Class", "id": "alarm_class"}, {"name": "Fault", "id": "description"}, {
-        "name": "Occ", "id": "occurrence_count"}, {"name": "Mins", "id": "total_duration_mins"}, {"name": "MMBF?", "id": "mmbf_tick", "presentation": "dropdown", "editable": True}]
+    rows = details.get(sid, [])
+
+    # [FIXED] Added "First Active" as the first column
+    cols = [
+        {"name": "First Active", "id": "first_occurrence"},
+        {"name": "Idx", "id": "alarm_index"},
+        {"name": "Class", "id": "alarm_class"},
+        {"name": "Fault", "id": "description"},
+        {"name": "Occ", "id": "occurrence_count"},
+        {"name": "Mins", "id": "total_duration_mins"},
+        {"name": "MMBF?", "id": "mmbf_tick",
+            "presentation": "dropdown", "editable": True}
+    ]
     return cols, rows
 
 
