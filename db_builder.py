@@ -8,8 +8,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 CSV_INPUT = os.path.join(BASE_DIR, 'RMG_units_jan_feb_export.csv')
 XML_INPUT = os.path.join(BASE_DIR, 'alarmlist.xml')
-WHITELIST_INPUT = os.path.join(BASE_DIR, 'MMbf_whitelist.csv')
-DB_OUTPUT = os.path.join(BASE_DIR, 'alarm_logs2.duckdb')
+# [REMOVED] WHITELIST_INPUT - Now handled live by the main tool
+DB_OUTPUT = os.path.join(BASE_DIR, 'alarm_logs3.duckdb')
 
 
 def parse_alarm_xml(xml_file):
@@ -46,34 +46,8 @@ def process_and_save():
     # 1. Parse XML Descriptions
     df_ref = parse_alarm_xml(XML_INPUT)
 
-    # 2. Process Whitelist (Moved from MMBF Tool)
-    print(f"Processing Whitelist: {WHITELIST_INPUT}...")
-    df_whitelist = pd.DataFrame(columns=['alarm_index', 'description'])
-
-    if os.path.exists(WHITELIST_INPUT):
-        try:
-            # Use latin-1 to handle special characters commonly found in RMG logs
-            df_white_raw = pd.read_csv(WHITELIST_INPUT, encoding='latin-1')
-
-            # Standardize columns: Expecting 'Code' and 'Description'
-            if 'Code' in df_white_raw.columns:
-                df_white_raw = df_white_raw.rename(
-                    columns={'Code': 'alarm_index', 'Description': 'description'})
-
-                # Clean Data
-                df_white_raw['alarm_index'] = pd.to_numeric(
-                    df_white_raw['alarm_index'], errors='coerce').fillna(0).astype(int)
-                df_white_raw['description'] = df_white_raw['description'].fillna(
-                    'No Description')
-
-                df_whitelist = df_white_raw[['alarm_index', 'description']]
-                print(
-                    f"Successfully processed {len(df_whitelist)} whitelist items.")
-        except Exception as e:
-            print(f"Error processing Whitelist CSV: {e}")
-    else:
-        print(
-            f"Warning: {WHITELIST_INPUT} not found. Whitelist table will be empty.")
+    # [REMOVED] Step 2: Whitelist processing removed.
+    # The tool will now read the CSV directly at runtime.
 
     # 3. Load Raw CSV Logs
     print(f"Loading {CSV_INPUT}...")
@@ -124,7 +98,7 @@ def process_and_save():
 
     # Create Tables
     con.execute("CREATE TABLE alarm_logs AS SELECT * FROM df_db")
-    con.execute("CREATE TABLE whitelist AS SELECT * FROM df_whitelist")
+    # [REMOVED] con.execute("CREATE TABLE whitelist AS SELECT * FROM df_whitelist")
 
     # Metadata tables for User Session Tracking
     con.execute("""
@@ -146,7 +120,7 @@ def process_and_save():
     """)
 
     con.close()
-    print("Success! Database built and whitelist imported.")
+    print("Success! Database built (Whitelist logic moved to Runtime).")
 
 
 if __name__ == "__main__":
