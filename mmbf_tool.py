@@ -1,6 +1,6 @@
 """
 Forensic analysis tool for RMG Fleet (RMG01 - RMG12) maintenance logs.
-Version: 7.1 - Dynamic Duration Filter
+Version: 7.4 - Fixed Date Filtering (String vs Timestamp), PDF & Explorer
 """
 
 import io
@@ -115,10 +115,19 @@ def get_db_date_range(db_path):
     if not con:
         return date(2025, 1, 1), date(2025, 12, 31)
     try:
-        res = con.execute(
-            "SELECT MIN(alarm_date), MAX(alarm_date) FROM alarm_logs").fetchone()
+        # Use try_cast to timestamp to handle date sorting correctly
+        res = con.execute("""
+            SELECT MIN(try_cast(alarm_date as DATE)), MAX(try_cast(alarm_date as DATE)) 
+            FROM alarm_logs
+        """).fetchone()
         if res and res[0] and res[1]:
             return pd.to_datetime(res[0]).date(), pd.to_datetime(res[1]).date()
+        else:
+            # Fallback to string sort if cast fails
+            res = con.execute(
+                "SELECT MIN(alarm_date), MAX(alarm_date) FROM alarm_logs").fetchone()
+            if res and res[0] and res[1]:
+                return pd.to_datetime(res[0]).date(), pd.to_datetime(res[1]).date()
     except Exception as e:
         print(f"[DEBUG] Date Range Fetch Error: {e}")
     finally:
@@ -152,17 +161,19 @@ def get_refined_move_count(crane_id, start_date, end_date, db_path):
     except:
         pass
 
+    # Safe Date Filter using Timestamp casting
     query = f"""
     SELECT alarm_index, UPPER(alarm_state) as state
     FROM alarm_logs
     WHERE unit_id ILIKE ? 
-    AND alarm_date >= ? AND alarm_date <= ?
+    AND (alarm_date || ' ' || alarm_time)::TIMESTAMP >= '{start_date} 00:00:00'
+    AND (alarm_date || ' ' || alarm_time)::TIMESTAMP <= '{end_date} 23:59:59'
     AND alarm_index IN ({TWISTLOCK_LOCKED_INDEX}, {TWISTLOCK_UNLOCKED_INDEX})
-    ORDER BY alarm_date ASC, alarm_time ASC
+    ORDER BY (alarm_date || ' ' || alarm_time)::TIMESTAMP ASC
     """
     auto_count = 0
     try:
-        df = con.execute(query, [crane_id, start_date, end_date]).df()
+        df = con.execute(query, [crane_id]).df()
         is_carrying = False
         for _, row in df.iterrows():
             idx = row['alarm_index']
@@ -180,14 +191,27 @@ def get_refined_move_count(crane_id, start_date, end_date, db_path):
 
 
 def get_maintenance_sessions(crane_id, start_date, end_date, db_path, whitelist_indices, min_duration=DEFAULT_MIN_DURATION):
+    """
+    Revised Logic: Resolution Ownership
+    Fix: Uses Timestamp casting for Date comparison to avoid String vs String errors.
+    """
     con = get_db_con(db_path)
     if not con:
         return pd.DataFrame(), {}
 
     try:
-        # 1. Identify Maintenance Windows
-        query = f"SELECT alarm_state, (alarm_date || ' ' || alarm_time)::TIMESTAMP as ts FROM alarm_logs WHERE unit_id ILIKE ? AND alarm_index = {MANUAL_MODE_INDEX} AND alarm_date >= ? AND alarm_date <= ? ORDER BY ts ASC"
-        df_manual = con.execute(query, [crane_id, start_date, end_date]).df()
+        # 1. Identify Maintenance Windows (Manual Mode)
+        # Using TIMESTAMP comparison for robust date filtering
+        query = f"""
+            SELECT alarm_state, (alarm_date || ' ' || alarm_time)::TIMESTAMP as ts 
+            FROM alarm_logs 
+            WHERE unit_id ILIKE ? 
+            AND alarm_index = {MANUAL_MODE_INDEX} 
+            AND (alarm_date || ' ' || alarm_time)::TIMESTAMP >= '{start_date} 00:00:00'
+            AND (alarm_date || ' ' || alarm_time)::TIMESTAMP <= '{end_date} 23:59:59'
+            ORDER BY ts ASC
+        """
+        df_manual = con.execute(query, [crane_id]).df()
 
         windows, start_ts = [], None
         for _, row in df_manual.iterrows():
@@ -207,94 +231,138 @@ def get_maintenance_sessions(crane_id, start_date, end_date, db_path, whitelist_
             meta_df = con.execute(
                 "SELECT * FROM forensic_metadata WHERE unit_id ILIKE ?", [crane_id]).df()
         except:
-            # Handle case where table doesn't exist yet
             meta_df = pd.DataFrame()
 
         sessions, details_map = [], {}
-        LOOKBACK_LIMIT = pd.Timedelta(minutes=60)
 
         for i, w in enumerate(windows):
             sid = i + 1
-            start_str = w['start'].strftime('%Y-%m-%d %H:%M:%S')
-
-            search_start_ts = w['start'] - LOOKBACK_LIMIT
-            if i > 0:
-                prev_end = windows[i-1]['end']
-                if search_start_ts < prev_end:
-                    search_start_ts = prev_end
-
-            search_start_str = search_start_ts.strftime('%Y-%m-%d %H:%M:%S')
-            end_str = w['end'].strftime('%Y-%m-%d %H:%M:%S')
+            session_start = w['start']
+            session_end = w['end']
+            start_str = session_start.strftime('%Y-%m-%d %H:%M:%S')
+            end_str = session_end.strftime('%Y-%m-%d %H:%M:%S')
 
             saved = meta_df[meta_df['session_start'] ==
                             start_str] if not meta_df.empty else pd.DataFrame()
 
-            fault_query = f"""
-                SELECT alarm_index, alarm_class, description, alarm_state, 
-                (alarm_date || ' ' || alarm_time)::TIMESTAMP as ts 
-                FROM alarm_logs 
-                WHERE unit_id ILIKE ? 
-                AND ts >= '{search_start_str}' AND ts <= '{end_str}' 
-                AND (description ILIKE '%Fault%' OR description ILIKE '%Stop%' OR description ILIKE '%Failure%' OR description ILIKE '%Emergency%' OR description ILIKE '%Collision%') 
-                ORDER BY ts ASC
+            # A. FIND CANDIDATES: Alarms that turned OFF *during* this session
+            candidate_query = f"""
+                SELECT alarm_index, description, alarm_class, (alarm_date || ' ' || alarm_time)::TIMESTAMP as off_ts
+                FROM alarm_logs
+                WHERE unit_id ILIKE ?
+                AND alarm_index != {MANUAL_MODE_INDEX}
+                AND (alarm_date || ' ' || alarm_time)::TIMESTAMP BETWEEN '{start_str}' AND '{end_str}'
+                AND alarm_state ILIKE '%OFF%'
             """
-            df_faults = con.execute(fault_query, [crane_id]).df()
+            df_candidates = con.execute(candidate_query, [crane_id]).df()
 
-            if not df_faults.empty:
-                summary = []
-                for desc in df_faults['description'].unique():
-                    f_events = df_faults[df_faults['description'] == desc].sort_values(
-                        'ts')
-                    first_occurrence_ts = f_events['ts'].min()
+            qualified_faults = []
 
-                    occ, dur_sec, on_time = 0, 0, None
-                    for _, evt in f_events.iterrows():
-                        st = str(evt['alarm_state']).upper()
-                        if 'ON' in st and on_time is None:
-                            on_time = evt['ts']
-                            occ += 1
-                        elif 'OFF' in st and on_time is not None:
-                            dur_sec += (evt['ts'] - on_time).total_seconds()
-                            on_time = None
-                    if on_time is not None:
-                        dur_sec += (w['end'] - on_time).total_seconds()
+            # B. VALIDATE ORIGIN: Did this specific alarm start BEFORE the session?
+            unique_indices = df_candidates['alarm_index'].unique()
 
-                    if occ > 0:
-                        idx = int(f_events['alarm_index'].iloc[0])
-                        is_ticked = any(
-                            not saved.empty and saved.iloc[0]['is_mmbf'] and saved.iloc[0]['primary_issue'] == desc for _ in [0])
-                        summary.append({
-                            'description': desc,
-                            'alarm_index': idx,
-                            'alarm_class': f_events['alarm_class'].iloc[0],
-                            'occurrence_count': occ,
-                            'total_duration_mins': round(dur_sec / 60, 2),
-                            'first_occurrence': first_occurrence_ts.strftime('%H:%M:%S'),
-                            'mmbf_tick': is_ticked,
-                            'is_whitelisted': 'True' if idx in whitelist_indices else 'False'
-                        })
+            for idx in unique_indices:
+                off_events = df_candidates[df_candidates['alarm_index'] == idx]
 
-                if summary:
-                    df_sum = pd.DataFrame(summary).sort_values(
-                        'first_occurrence', ascending=True)
-                    if not saved.empty:
-                        mmbf_tag, p_issue, p_index = 'Yes' if saved.iloc[0]['is_mmbf'] else 'No', saved.iloc[
-                            0]['primary_issue'], saved.iloc[0]['primary_index']
-                    else:
-                        mmbf_tag, p_issue, p_index = 'No', df_sum.iloc[0][
-                            'description'], df_sum.iloc[0]['alarm_index']
+                for _, off_row in off_events.iterrows():
+                    off_ts = off_row['off_ts']
+                    off_ts_str = off_ts.strftime('%Y-%m-%d %H:%M:%S')
 
-                    sessions.append({
-                        'session_id': sid,
-                        'start_timestamp': start_str,
-                        'end_timestamp': end_str,
-                        'session_duration_mins': w['duration'],
-                        'primary_index': p_index,
-                        'primary_issue': p_issue,
-                        'mmbf_tag': mmbf_tag,
-                        'is_whitelisted': 'True' if int(p_index) in whitelist_indices else 'False'
+                    # Find the LAST 'ON' event strictly BEFORE the OFF event
+                    prev_on_query = f"""
+                        SELECT (alarm_date || ' ' || alarm_time)::TIMESTAMP as on_ts
+                        FROM alarm_logs
+                        WHERE unit_id ILIKE ? 
+                        AND alarm_index = ? 
+                        AND (alarm_date || ' ' || alarm_time)::TIMESTAMP < '{off_ts_str}'
+                        AND alarm_state ILIKE '%ON%'
+                        ORDER BY alarm_date DESC, alarm_time DESC
+                        LIMIT 1
+                    """
+                    res = con.execute(
+                        prev_on_query, [crane_id, int(idx)]).fetchone()
+
+                    if res and res[0]:
+                        last_on_ts = pd.to_datetime(res[0])
+
+                        # CORE LOGIC: Start BEFORE session, End DURING session
+                        if last_on_ts < session_start:
+                            fault_dur_min = (
+                                off_ts - last_on_ts).total_seconds() / 60
+
+                            qualified_faults.append({
+                                'description': off_row['description'],
+                                'alarm_index': int(idx),
+                                'alarm_class': off_row['alarm_class'],
+                                'occurrence_count': 1,
+                                'total_duration_mins': round(fault_dur_min, 2),
+                                'first_occurrence': last_on_ts.strftime('%Y-%m-%d %H:%M:%S'),
+                                'resolution_time': off_ts.strftime('%Y-%m-%d %H:%M:%S'),
+                                'mmbf_tick': False,
+                                'is_whitelisted': 'True' if int(idx) in whitelist_indices else 'False'
+                            })
+
+            # C. Aggregate
+            summary = []
+            if qualified_faults:
+                df_q = pd.DataFrame(qualified_faults)
+                for desc in df_q['description'].unique():
+                    f_grp = df_q[df_q['description'] == desc]
+                    idx = int(f_grp['alarm_index'].iloc[0])
+
+                    is_ticked = any(
+                        not saved.empty and saved.iloc[0]['is_mmbf'] and saved.iloc[0]['primary_issue'] == desc for _ in [0])
+
+                    # Take the resolution time of the LAST occurrence if aggregated
+                    res_time_str = f_grp.sort_values(
+                        'resolution_time', ascending=False).iloc[0]['resolution_time']
+
+                    summary.append({
+                        'description': desc,
+                        'alarm_index': idx,
+                        'alarm_class': f_grp['alarm_class'].iloc[0],
+                        'occurrence_count': len(f_grp),
+                        'total_duration_mins': f_grp['total_duration_mins'].sum(),
+                        'first_occurrence': f_grp['first_occurrence'].min(),
+                        'resolution_time': res_time_str,
+                        'mmbf_tick': is_ticked,
+                        'is_whitelisted': 'True' if idx in whitelist_indices else 'False'
                     })
-                    details_map[str(sid)] = df_sum.to_dict('records')
+
+            # D. Finalize Session Object
+            if summary:
+                df_sum = pd.DataFrame(summary).sort_values(
+                    'first_occurrence', ascending=True)
+
+                if not saved.empty:
+                    mmbf_tag, p_issue, p_index = 'Yes' if saved.iloc[0]['is_mmbf'] else 'No', saved.iloc[
+                        0]['primary_issue'], saved.iloc[0]['primary_index']
+                else:
+                    mmbf_tag, p_issue, p_index = 'No', df_sum.iloc[0][
+                        'description'], df_sum.iloc[0]['alarm_index']
+
+                sessions.append({
+                    'session_id': sid,
+                    'start_timestamp': start_str,
+                    'end_timestamp': end_str,
+                    'session_duration_mins': w['duration'],
+                    'primary_index': p_index,
+                    'primary_issue': p_issue,
+                    'mmbf_tag': mmbf_tag,
+                    'is_whitelisted': 'True' if int(p_index) in whitelist_indices else 'False'
+                })
+                details_map[str(sid)] = df_sum.to_dict('records')
+            else:
+                sessions.append({
+                    'session_id': sid,
+                    'start_timestamp': start_str,
+                    'end_timestamp': end_str,
+                    'session_duration_mins': w['duration'],
+                    'primary_index': 0,
+                    'primary_issue': "No Pre-Existing Fault Resolved",
+                    'mmbf_tag': 'No',
+                    'is_whitelisted': 'False'
+                })
 
         if con:
             con.close()
@@ -310,15 +378,26 @@ def get_explorer_logs(crane_id, start_date, end_date, index_filter, desc_filter,
     con = get_db_con(db_path)
     if not con:
         return pd.DataFrame()
-    query = "SELECT unit_id, alarm_date, alarm_time, alarm_index, alarm_class, description, alarm_state FROM alarm_logs WHERE unit_id ILIKE ? AND alarm_date >= ? AND alarm_date <= ?"
-    params = [crane_id, start_date, end_date]
+
+    # Fix: Cast to timestamp for correct date filtering
+    query = f"""
+        SELECT unit_id, alarm_date, alarm_time, alarm_index, alarm_class, description, alarm_state 
+        FROM alarm_logs 
+        WHERE unit_id ILIKE ? 
+        AND (alarm_date || ' ' || alarm_time)::TIMESTAMP >= '{start_date} 00:00:00'
+        AND (alarm_date || ' ' || alarm_time)::TIMESTAMP <= '{end_date} 23:59:59'
+    """
+    params = [crane_id]
+
     if index_filter:
         query += " AND CAST(alarm_index AS VARCHAR) LIKE ?"
         params.append(f"%{index_filter}%")
     if desc_filter:
         query += " AND description ILIKE ?"
         params.append(f"%{desc_filter}%")
-    query += " ORDER BY alarm_date DESC, alarm_time DESC LIMIT 5000"
+
+    query += " ORDER BY (alarm_date || ' ' || alarm_time)::TIMESTAMP DESC LIMIT 5000"
+
     try:
         df = con.execute(query, params).df()
         df['is_whitelisted'] = df['alarm_index'].apply(
@@ -335,7 +414,6 @@ def get_explorer_logs(crane_id, start_date, end_date, index_filter, desc_filter,
 # --- DASHBOARD UI ---
 app = dash.Dash(__name__)
 
-# Upload Component Style - UPDATED to look like actionable buttons
 upload_btn_style = {
     'display': 'inline-block',
     'width': '140px',
@@ -361,7 +439,7 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
     # Config Stores
     dcc.Store(id='current-db-path', data=DEFAULT_DB_PATH),
     dcc.Store(id='whitelist-data-store', data=load_default_whitelist()),
-    dcc.Store(id='date-range-store'),  # To store DB specific min/max dates
+    dcc.Store(id='date-range-store'),
 
     # Header
     html.Div(style={'backgroundColor': '#1e293b', 'padding': '20px', 'color': 'white', 'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center'}, children=[
@@ -451,8 +529,6 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
 
 # --- CALLBACKS ---
 
-# 1. Config Callback: Handles File Uploads
-
 
 @app.callback(
     [Output('current-db-path', 'data'), Output('whitelist-data-store', 'data'), Output('config-status', 'children'),
@@ -465,7 +541,6 @@ def update_config(db_content, wl_content, db_name, wl_name, current_db_path, cur
     ctx = dash.callback_context
     status_msg = "Config Loaded"
 
-    # Handle DB Upload
     if ctx.triggered and 'upload-db' in ctx.triggered[0]['prop_id'] and db_content:
         try:
             content_type, content_string = db_content.split(',')
@@ -479,7 +554,6 @@ def update_config(db_content, wl_content, db_name, wl_name, current_db_path, cur
         except Exception as e:
             status_msg = f"DB Load Error: {e}"
 
-    # Handle Whitelist Upload
     if ctx.triggered and 'upload-whitelist' in ctx.triggered[0]['prop_id'] and wl_content:
         try:
             content_type, content_string = wl_content.split(',')
@@ -489,12 +563,8 @@ def update_config(db_content, wl_content, db_name, wl_name, current_db_path, cur
         except Exception as e:
             status_msg = f"Whitelist Load Error: {e}"
 
-    # Recalculate Date Range for the active DB
     min_date, max_date = get_db_date_range(current_db_path)
-
     return current_db_path, current_wl_data, status_msg, min_date, max_date, min_date, max_date
-
-# 2. Main Data Callback
 
 
 @app.callback(
@@ -509,11 +579,14 @@ def update_config(db_content, wl_content, db_name, wl_name, current_db_path, cur
 def update_crane_and_moves(crane_id, start_date, end_date, n_clicks, db_path, whitelist_data, min_duration, manual_val):
     ctx = dash.callback_context
 
-    # Validation for min_duration
-    if min_duration is None:
+    if min_duration is not None:
+        try:
+            min_duration = float(min_duration)
+        except ValueError:
+            min_duration = DEFAULT_MIN_DURATION
+    else:
         min_duration = DEFAULT_MIN_DURATION
 
-    # Handle Manual Move Override
     if ctx.triggered and 'save-moves-btn' in ctx.triggered[0]['prop_id'] and manual_val is not None:
         con = get_db_con(db_path, read_only=False)
         if con:
@@ -521,12 +594,10 @@ def update_crane_and_moves(crane_id, start_date, end_date, n_clicks, db_path, wh
                         crane_id, manual_val])
             con.close()
 
-    # Process Whitelist Indices
     whitelist_indices = {int(x['alarm_index'])
                          for x in whitelist_data} if whitelist_data else set()
 
     moves = get_refined_move_count(crane_id, start_date, end_date, db_path)
-    # Pass the dynamic duration filter here
     df_s, details = get_maintenance_sessions(
         crane_id, start_date, end_date, db_path, whitelist_indices, min_duration)
 
@@ -535,16 +606,12 @@ def update_crane_and_moves(crane_id, start_date, end_date, n_clicks, db_path, wh
 
     return (df_s.to_dict('records') if not df_s.empty else [], details, moves, f"{moves:,}", str(mmbf_count), mmbf_val, [0] if not df_s.empty else [])
 
-# 3. Table Column Updater
-
 
 @app.callback([Output('session-table', 'columns'), Output('session-table', 'data')], [Input('session-store', 'data')])
 def update_table_data(data):
     cols = [{"name": i, "id": j} for i, j in [("ID", "session_id"), ("Start", "start_timestamp"), ("End", "end_timestamp"), (
         "Duration (min)", "session_duration_mins"), ("Index", "primary_index"), ("Primary Root Cause", "primary_issue"), ("MMBF?", "mmbf_tag")]]
     return cols, data or []
-
-# 4. Details Updater
 
 
 @app.callback([Output('detail-table', 'columns'), Output('detail-table', 'data')], [Input('session-table', 'selected_rows'), State('session-table', 'data'), State('details-store', 'data')])
@@ -554,18 +621,16 @@ def update_details(selected, session_data, details):
     sid = str(session_data[selected[0]]['session_id'])
     rows = details.get(sid, [])
     cols = [
-        {"name": "First Active", "id": "first_occurrence"},
+        {"name": "Start Time", "id": "first_occurrence"},
+        {"name": "End Time", "id": "resolution_time"},
         {"name": "Idx", "id": "alarm_index"},
         {"name": "Class", "id": "alarm_class"},
         {"name": "Fault", "id": "description"},
-        {"name": "Occ", "id": "occurrence_count"},
-        {"name": "Mins", "id": "total_duration_mins"},
+        {"name": "Duration (min)", "id": "total_duration_mins"},
         {"name": "MMBF?", "id": "mmbf_tick",
             "presentation": "dropdown", "editable": True}
     ]
     return cols, rows
-
-# 5. MMBF Sync/Save
 
 
 @app.callback([Output('session-store', 'data', allow_duplicate=True), Output('mmbf-value', 'children', allow_duplicate=True), Output('kpi-mmbf-count', 'children', allow_duplicate=True)],
@@ -601,8 +666,6 @@ def sync_and_save_mmbf(ts, detail_data, selected_rows, current_table, session_st
     mmbf_val = f"{(mmbf_count / (total_moves / 1000)):.2f}" if total_moves > 0 else "0.00"
     return session_store, mmbf_val, str(mmbf_count)
 
-# 6. Explorer Tab
-
 
 @app.callback([Output('explorer-table', 'columns'), Output('explorer-table', 'data'), Output('whitelist-display-table', 'data')],
               [Input('tabs-main', 'value'), Input('explorer-btn', 'n_clicks'), Input('crane-selector', 'value'), Input('date-picker',
@@ -623,8 +686,6 @@ def update_explorer_tab(tab, n, crane_id, start, end, db_path, whitelist_data, i
     cols = [{"name": i.replace('_', ' ').title(), "id": i}
             for i in df_logs.columns if i != 'is_whitelisted']
     return cols, df_logs.to_dict('records'), whitelist_data or []
-
-# 7. PDF Report
 
 
 @app.callback(
@@ -700,11 +761,14 @@ def generate_pdf_report(n, session_data, details_data, crane_id, total_moves, st
         if faults:
             pdf.set_font("Helvetica", "B", 7)
             pdf.set_fill_color(220, 220, 220)
-            pdf.cell(15, 6, "Index", 1, 0, 'C', True)
-            pdf.cell(115, 6, "Fault Description", 1, 0, 'C', True)
-            pdf.cell(15, 6, "Class", 1, 0, 'C', True)
-            pdf.cell(15, 6, "Occ", 1, 0, 'C', True)
-            pdf.cell(30, 6, "Total Duration (min)", 1, 1, 'C', True)
+
+            # Revised PDF headers to match UI
+            pdf.cell(35, 6, "Start", 1, 0, 'C', True)
+            pdf.cell(35, 6, "End", 1, 0, 'C', True)
+            pdf.cell(12, 6, "Idx", 1, 0, 'C', True)
+            pdf.cell(12, 6, "Cls", 1, 0, 'C', True)
+            pdf.cell(70, 6, "Fault", 1, 0, 'C', True)
+            pdf.cell(15, 6, "Dur", 1, 1, 'C', True)
 
             pdf.set_font("Helvetica", "", 7)
             for f in faults:
@@ -714,12 +778,18 @@ def generate_pdf_report(n, session_data, details_data, crane_id, total_moves, st
                     pdf.set_fill_color(*HIGHLIGHT_COLOR)
                 if pdf.get_y() > 275:
                     pdf.add_page()
-                pdf.cell(15, 6, str(f['alarm_index']), 1, 0, 'C', fill)
-                pdf.cell(115, 6, sanitize_str(
-                    str(f['description'])[:85]), 1, 0, 'L', fill)
-                pdf.cell(15, 6, str(f['alarm_class']), 1, 0, 'C', fill)
-                pdf.cell(15, 6, str(f['occurrence_count']), 1, 0, 'C', fill)
-                pdf.cell(30, 6, str(f['total_duration_mins']), 1, 1, 'C', fill)
+
+                # Check for key existence to prevent KeyError if data model changed
+                start_val = str(f.get('first_occurrence', ''))
+                res_val = str(f.get('resolution_time', ''))
+
+                pdf.cell(35, 6, start_val, 1, 0, 'C', fill)
+                pdf.cell(35, 6, res_val, 1, 0, 'C', fill)
+                pdf.cell(12, 6, str(f['alarm_index']), 1, 0, 'C', fill)
+                pdf.cell(12, 6, str(f['alarm_class']), 1, 0, 'C', fill)
+                pdf.cell(70, 6, sanitize_str(
+                    str(f['description'])[:65]), 1, 0, 'L', fill)
+                pdf.cell(15, 6, str(f['total_duration_mins']), 1, 1, 'C', fill)
         else:
             pdf.set_font("Helvetica", "I", 7)
             pdf.cell(
