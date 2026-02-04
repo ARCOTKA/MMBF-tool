@@ -1,6 +1,6 @@
 """
 Forensic analysis tool for RMG Fleet (RMG01 - RMG12) maintenance logs.
-Version: 8.2 - Session Highlighting & Explorer Updates
+Version: 8.3 - Fix: Default Duration set to 0 to capture short maintenance events.
 """
 
 import io
@@ -24,7 +24,8 @@ CRANE_LIST = [f'RMG{str(i).zfill(2)}' for i in range(1, 13)]
 
 # Alarm Index Constants
 MANUAL_MODE_INDEX = 57011
-DEFAULT_MIN_DURATION = 15
+# UPDATED: Changed from 15 to 0 to capture all maintenance events by default
+DEFAULT_MIN_DURATION = 0
 TWISTLOCK_LOCKED_INDEX = 5740
 TWISTLOCK_UNLOCKED_INDEX = 5741
 
@@ -425,7 +426,8 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
             html.Div([html.Label("Asset Identifier:", style={'fontSize': '12px', 'color': '#94a3b8', 'display': 'block'}),
                       dcc.Dropdown(id='crane-selector', options=[{'label': c, 'value': c} for c in CRANE_LIST], value='RMG05', clearable=False, style={'width': '120px', 'color': '#1e293b'})]),
             html.Div([html.Label("Min Duration (min):", style={'fontSize': '12px', 'color': '#94a3b8', 'display': 'block'}),
-                      dcc.Input(id='min-duration-input', type='number', value=15, min=0, step=1, style={'width': '100px', 'color': '#1e293b', 'borderRadius': '4px', 'border': 'none', 'padding': '4px'})])
+                      # UPDATED: Default value set to 0 here as well
+                      dcc.Input(id='min-duration-input', type='number', value=0, min=0, step=1, style={'width': '100px', 'color': '#1e293b', 'borderRadius': '4px', 'border': 'none', 'padding': '4px'})])
         ])
     ]),
 
