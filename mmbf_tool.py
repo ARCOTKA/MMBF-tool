@@ -1,6 +1,6 @@
 """
 Forensic analysis tool for RMG Fleet (RMG01 - RMG12) maintenance logs.
-Version: 7.0 - Dynamic File Loading & UI
+Version: 7.1 - Dynamic Duration Filter
 """
 
 import io
@@ -24,7 +24,7 @@ CRANE_LIST = [f'RMG{str(i).zfill(2)}' for i in range(1, 13)]
 
 # Alarm Index Constants
 MANUAL_MODE_INDEX = 57011
-MIN_SESSION_DURATION_MINS = 15
+DEFAULT_MIN_DURATION = 15  # Fallback default
 TWISTLOCK_LOCKED_INDEX = 5740
 TWISTLOCK_UNLOCKED_INDEX = 5741
 
@@ -179,7 +179,7 @@ def get_refined_move_count(crane_id, start_date, end_date, db_path):
     return auto_count
 
 
-def get_maintenance_sessions(crane_id, start_date, end_date, db_path, whitelist_indices):
+def get_maintenance_sessions(crane_id, start_date, end_date, db_path, whitelist_indices, min_duration=DEFAULT_MIN_DURATION):
     con = get_db_con(db_path)
     if not con:
         return pd.DataFrame(), {}
@@ -196,7 +196,8 @@ def get_maintenance_sessions(crane_id, start_date, end_date, db_path, whitelist_
                 start_ts = row['ts']
             elif 'OFF' in state and start_ts is not None:
                 dur = (row['ts'] - start_ts).total_seconds() / 60
-                if dur >= MIN_SESSION_DURATION_MINS:
+                # Filter using the dynamic min_duration argument
+                if dur >= min_duration:
                     windows.append(
                         {'start': start_ts, 'end': row['ts'], 'duration': round(dur, 2)})
                 start_ts = None
@@ -387,8 +388,12 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
             # Controls
             html.Div([html.Label("Analysis Period:", style={'fontSize': '12px', 'color': '#94a3b8', 'display': 'block'}),
                       dcc.DatePickerRange(id='date-picker', style={'fontSize': '12px'})]),
+
             html.Div([html.Label("Asset Identifier:", style={'fontSize': '12px', 'color': '#94a3b8', 'display': 'block'}),
-                      dcc.Dropdown(id='crane-selector', options=[{'label': c, 'value': c} for c in CRANE_LIST], value='RMG05', clearable=False, style={'width': '120px', 'color': '#1e293b'})])
+                      dcc.Dropdown(id='crane-selector', options=[{'label': c, 'value': c} for c in CRANE_LIST], value='RMG05', clearable=False, style={'width': '120px', 'color': '#1e293b'})]),
+
+            html.Div([html.Label("Min Duration (min):", style={'fontSize': '12px', 'color': '#94a3b8', 'display': 'block'}),
+                      dcc.Input(id='min-duration-input', type='number', value=15, min=0, step=1, style={'width': '100px', 'color': '#1e293b', 'borderRadius': '4px', 'border': 'none', 'padding': '4px'})])
         ])
     ]),
 
@@ -496,11 +501,18 @@ def update_config(db_content, wl_content, db_name, wl_name, current_db_path, cur
     [Output('session-store', 'data'), Output('details-store', 'data'), Output('moves-store', 'data'),
      Output('kpi-moves-val', 'children'), Output('kpi-mmbf-count', 'children'), Output('mmbf-value', 'children'), Output('session-table', 'selected_rows')],
     [Input('crane-selector', 'value'), Input('date-picker', 'start_date'), Input('date-picker', 'end_date'),
-     Input('save-moves-btn', 'n_clicks'), Input('current-db-path', 'data'), Input('whitelist-data-store', 'data')],
+     Input('save-moves-btn', 'n_clicks'), Input('current-db-path',
+                                                'data'), Input('whitelist-data-store', 'data'),
+     Input('min-duration-input', 'value')],
     [State('manual-move-input', 'value')]
 )
-def update_crane_and_moves(crane_id, start_date, end_date, n_clicks, db_path, whitelist_data, manual_val):
+def update_crane_and_moves(crane_id, start_date, end_date, n_clicks, db_path, whitelist_data, min_duration, manual_val):
     ctx = dash.callback_context
+
+    # Validation for min_duration
+    if min_duration is None:
+        min_duration = DEFAULT_MIN_DURATION
+
     # Handle Manual Move Override
     if ctx.triggered and 'save-moves-btn' in ctx.triggered[0]['prop_id'] and manual_val is not None:
         con = get_db_con(db_path, read_only=False)
@@ -514,8 +526,9 @@ def update_crane_and_moves(crane_id, start_date, end_date, n_clicks, db_path, wh
                          for x in whitelist_data} if whitelist_data else set()
 
     moves = get_refined_move_count(crane_id, start_date, end_date, db_path)
+    # Pass the dynamic duration filter here
     df_s, details = get_maintenance_sessions(
-        crane_id, start_date, end_date, db_path, whitelist_indices)
+        crane_id, start_date, end_date, db_path, whitelist_indices, min_duration)
 
     mmbf_count = len(df_s[df_s['mmbf_tag'] == 'Yes']) if not df_s.empty else 0
     mmbf_val = f"{(mmbf_count / (moves / 1000)):.2f}" if moves > 0 else "0.00"
