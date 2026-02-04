@@ -1,6 +1,6 @@
 """
 Forensic analysis tool for RMG Fleet (RMG01 - RMG12) maintenance logs.
-Version: 7.4 - Fixed Date Filtering (String vs Timestamp), PDF & Explorer
+Version: 8.0 - Performance Optimized (In-Memory Processing) + Loading Indicators
 """
 
 import io
@@ -24,7 +24,7 @@ CRANE_LIST = [f'RMG{str(i).zfill(2)}' for i in range(1, 13)]
 
 # Alarm Index Constants
 MANUAL_MODE_INDEX = 57011
-DEFAULT_MIN_DURATION = 15  # Fallback default
+DEFAULT_MIN_DURATION = 15
 TWISTLOCK_LOCKED_INDEX = 5740
 TWISTLOCK_UNLOCKED_INDEX = 5741
 
@@ -37,7 +37,6 @@ def parse_whitelist_content(content_type, content_string):
         decoded = base64.b64decode(content_string)
         df = pd.read_csv(io.BytesIO(decoded), encoding='latin-1')
 
-        # Standardize columns
         if 'Code' in df.columns:
             df = df.rename(
                 columns={'Code': 'alarm_index', 'Description': 'description'})
@@ -71,8 +70,6 @@ def load_default_whitelist():
 def get_db_con(db_path, read_only=True):
     """Returns a DuckDB connection to the specified path."""
     if not db_path or not os.path.exists(db_path):
-        # Fallback to in-memory if file missing to prevent crash
-        print(f"[DEBUG] DB file not found: {db_path}")
         return None
     try:
         return duckdb.connect(db_path, read_only=read_only)
@@ -115,7 +112,6 @@ def get_db_date_range(db_path):
     if not con:
         return date(2025, 1, 1), date(2025, 12, 31)
     try:
-        # Use try_cast to timestamp to handle date sorting correctly
         res = con.execute("""
             SELECT MIN(try_cast(alarm_date as DATE)), MAX(try_cast(alarm_date as DATE)) 
             FROM alarm_logs
@@ -123,7 +119,6 @@ def get_db_date_range(db_path):
         if res and res[0] and res[1]:
             return pd.to_datetime(res[0]).date(), pd.to_datetime(res[1]).date()
         else:
-            # Fallback to string sort if cast fails
             res = con.execute(
                 "SELECT MIN(alarm_date), MAX(alarm_date) FROM alarm_logs").fetchone()
             if res and res[0] and res[1]:
@@ -145,13 +140,18 @@ def sanitize_str(text):
         text = text.replace(char, rep)
     return text.encode('latin-1', 'ignore').decode('latin-1')
 
-# --- CORE LOGIC (Refactored for Dependency Injection) ---
+# --- OPTIMIZED CORE LOGIC ---
 
 
 def get_refined_move_count(crane_id, start_date, end_date, db_path):
+    """
+    Counts manual moves using optimized SQL to fetch only relevant records.
+    """
     con = get_db_con(db_path)
     if not con:
         return 0
+
+    # Check manual override first
     try:
         res = con.execute("SELECT manual_count FROM manual_move_overrides WHERE UPPER(unit_id) = UPPER(?)", [
                           crane_id]).fetchone()
@@ -161,7 +161,6 @@ def get_refined_move_count(crane_id, start_date, end_date, db_path):
     except:
         pass
 
-    # Safe Date Filter using Timestamp casting
     query = f"""
     SELECT alarm_index, UPPER(alarm_state) as state
     FROM alarm_logs
@@ -171,192 +170,231 @@ def get_refined_move_count(crane_id, start_date, end_date, db_path):
     AND alarm_index IN ({TWISTLOCK_LOCKED_INDEX}, {TWISTLOCK_UNLOCKED_INDEX})
     ORDER BY (alarm_date || ' ' || alarm_time)::TIMESTAMP ASC
     """
+
     auto_count = 0
     try:
+        # Fetching strictly necessary columns/rows
         df = con.execute(query, [crane_id]).df()
-        is_carrying = False
-        for _, row in df.iterrows():
-            idx = row['alarm_index']
-            state = str(row['state'])
-            if idx == TWISTLOCK_LOCKED_INDEX and 'ON' in state:
-                is_carrying = True
-            elif idx == TWISTLOCK_UNLOCKED_INDEX and 'ON' in state and is_carrying:
-                auto_count += 1
-                is_carrying = False
+
+        # Fast iteration
+        if not df.empty:
+            is_carrying = False
+            # Convert to numpy for slight speedup if needed, but iterrows is usually okay for <10k moves
+            for idx, state in zip(df['alarm_index'], df['state']):
+                if idx == TWISTLOCK_LOCKED_INDEX and 'ON' in state:
+                    is_carrying = True
+                elif idx == TWISTLOCK_UNLOCKED_INDEX and 'ON' in state and is_carrying:
+                    auto_count += 1
+                    is_carrying = False
     except Exception as e:
         print(f"[DEBUG] Move Calculation Error: {e}")
-    if con:
-        con.close()
+    finally:
+        if con:
+            con.close()
     return auto_count
 
 
 def get_maintenance_sessions(crane_id, start_date, end_date, db_path, whitelist_indices, min_duration=DEFAULT_MIN_DURATION):
     """
-    Revised Logic: Resolution Ownership
-    Fix: Uses Timestamp casting for Date comparison to avoid String vs String errors.
+    Drastically optimized version:
+    1. Loads all logs for the unit into memory ONCE.
+    2. Performs all logic in Pandas (Memory) to avoid N+1 SQL queries.
     """
     con = get_db_con(db_path)
     if not con:
         return pd.DataFrame(), {}
 
     try:
-        # 1. Identify Maintenance Windows (Manual Mode)
-        # Using TIMESTAMP comparison for robust date filtering
-        query = f"""
-            SELECT alarm_state, (alarm_date || ' ' || alarm_time)::TIMESTAMP as ts 
-            FROM alarm_logs 
-            WHERE unit_id ILIKE ? 
-            AND alarm_index = {MANUAL_MODE_INDEX} 
-            AND (alarm_date || ' ' || alarm_time)::TIMESTAMP >= '{start_date} 00:00:00'
-            AND (alarm_date || ' ' || alarm_time)::TIMESTAMP <= '{end_date} 23:59:59'
+        # 1. Bulk Load Data
+        # We load full history for the unit to ensure we can find "Previous ON" events
+        # that might have happened days/weeks ago.
+        query = """
+            SELECT 
+                alarm_index, 
+                description, 
+                alarm_class, 
+                alarm_state,
+                (alarm_date || ' ' || alarm_time)::TIMESTAMP as ts
+            FROM alarm_logs
+            WHERE unit_id ILIKE ?
             ORDER BY ts ASC
         """
-        df_manual = con.execute(query, [crane_id]).df()
+        df = con.execute(query, [crane_id]).df()
 
-        windows, start_ts = [], None
-        for _, row in df_manual.iterrows():
-            state = str(row['alarm_state']).upper()
-            if 'ON' in state and start_ts is None:
-                start_ts = row['ts']
-            elif 'OFF' in state and start_ts is not None:
-                dur = (row['ts'] - start_ts).total_seconds() / 60
-                # Filter using the dynamic min_duration argument
-                if dur >= min_duration:
-                    windows.append(
-                        {'start': start_ts, 'end': row['ts'], 'duration': round(dur, 2)})
-                start_ts = None
-
-        # 2. Analyze Faults
+        # Load Metadata
         try:
             meta_df = con.execute(
                 "SELECT * FROM forensic_metadata WHERE unit_id ILIKE ?", [crane_id]).df()
         except:
             meta_df = pd.DataFrame()
 
-        sessions, details_map = [], {}
+        con.close()
+
+        if df.empty:
+            return pd.DataFrame(), {}
+
+        # 2. Identify Manual Mode Windows (Vectorized)
+        df_manual = df[df['alarm_index'] == MANUAL_MODE_INDEX].copy()
+        windows = []
+
+        # Simple State Machine for Manual Mode
+        # Assuming sorted by time
+        current_start = None
+
+        # Filter range timestamps
+        range_start_ts = pd.Timestamp(f"{start_date} 00:00:00")
+        range_end_ts = pd.Timestamp(f"{end_date} 23:59:59")
+
+        for row in df_manual.itertuples():
+            state = str(row.alarm_state).upper()
+            ts = row.ts
+
+            if 'ON' in state and current_start is None:
+                current_start = ts
+            elif 'OFF' in state and current_start is not None:
+                # Logic: We consider the session if it falls within the requested period
+                # Checking if the session ENDs in the period or overlaps
+                if ts >= range_start_ts and ts <= range_end_ts:
+                    dur = (ts - current_start).total_seconds() / 60
+                    if dur >= min_duration:
+                        windows.append({
+                            'start': current_start,
+                            'end': ts,
+                            'duration': round(dur, 2)
+                        })
+                current_start = None
+
+        # 3. Analyze Faults per Window
+        sessions = []
+        details_map = {}
+
+        # Optimization: Pre-filter faults (everything except manual mode)
+        df_faults = df[df['alarm_index'] != MANUAL_MODE_INDEX].copy()
+
+        # To optimize "Find previous ON", we can group by alarm_index first
+        # But simply filtering inside the window loop is robust enough for typical counts.
 
         for i, w in enumerate(windows):
             sid = i + 1
-            session_start = w['start']
-            session_end = w['end']
-            start_str = session_start.strftime('%Y-%m-%d %H:%M:%S')
-            end_str = session_end.strftime('%Y-%m-%d %H:%M:%S')
+            w_start = w['start']
+            w_end = w['end']
 
-            saved = meta_df[meta_df['session_start'] ==
-                            start_str] if not meta_df.empty else pd.DataFrame()
-
-            # A. FIND CANDIDATES: Alarms that turned OFF *during* this session
-            candidate_query = f"""
-                SELECT alarm_index, description, alarm_class, (alarm_date || ' ' || alarm_time)::TIMESTAMP as off_ts
-                FROM alarm_logs
-                WHERE unit_id ILIKE ?
-                AND alarm_index != {MANUAL_MODE_INDEX}
-                AND (alarm_date || ' ' || alarm_time)::TIMESTAMP BETWEEN '{start_str}' AND '{end_str}'
-                AND alarm_state ILIKE '%OFF%'
-            """
-            df_candidates = con.execute(candidate_query, [crane_id]).df()
+            # Find alarms that turned OFF *during* this window
+            # Using vectorized boolean masking
+            in_window_mask = (df_faults['ts'] >= w_start) & (df_faults['ts'] <= w_end) & (
+                df_faults['alarm_state'].str.contains('OFF', case=False, na=False))
+            candidates = df_faults[in_window_mask]
 
             qualified_faults = []
 
-            # B. VALIDATE ORIGIN: Did this specific alarm start BEFORE the session?
-            unique_indices = df_candidates['alarm_index'].unique()
+            for cand in candidates.itertuples():
+                idx = cand.alarm_index
+                off_ts = cand.ts
 
-            for idx in unique_indices:
-                off_events = df_candidates[df_candidates['alarm_index'] == idx]
+                # Find the last 'ON' event for this specific alarm index strictly before w_start
+                # Filter specific alarm history
+                # OPTIMIZATION: Instead of full DF scan, we could improve, but this is memory-fast enough
+                alarm_history = df_faults[df_faults['alarm_index'] == idx]
 
-                for _, off_row in off_events.iterrows():
-                    off_ts = off_row['off_ts']
-                    off_ts_str = off_ts.strftime('%Y-%m-%d %H:%M:%S')
+                # Get ON events before OFF timestamp
+                # Logic: "Last ON strictly before the OFF event" AND "Start BEFORE session"
+                prior_on_mask = (alarm_history['ts'] < off_ts) & (
+                    alarm_history['alarm_state'].str.contains('ON', case=False, na=False))
+                prior_on_events = alarm_history[prior_on_mask]
 
-                    # Find the LAST 'ON' event strictly BEFORE the OFF event
-                    prev_on_query = f"""
-                        SELECT (alarm_date || ' ' || alarm_time)::TIMESTAMP as on_ts
-                        FROM alarm_logs
-                        WHERE unit_id ILIKE ? 
-                        AND alarm_index = ? 
-                        AND (alarm_date || ' ' || alarm_time)::TIMESTAMP < '{off_ts_str}'
-                        AND alarm_state ILIKE '%ON%'
-                        ORDER BY alarm_date DESC, alarm_time DESC
-                        LIMIT 1
-                    """
-                    res = con.execute(
-                        prev_on_query, [crane_id, int(idx)]).fetchone()
+                if not prior_on_events.empty:
+                    last_on_ts = prior_on_events.iloc[-1]['ts']
 
-                    if res and res[0]:
-                        last_on_ts = pd.to_datetime(res[0])
+                    # Core Logic Check: Did it start before the session?
+                    if last_on_ts < w_start:
+                        fault_dur = (off_ts - last_on_ts).total_seconds() / 60
 
-                        # CORE LOGIC: Start BEFORE session, End DURING session
-                        if last_on_ts < session_start:
-                            fault_dur_min = (
-                                off_ts - last_on_ts).total_seconds() / 60
+                        qualified_faults.append({
+                            'description': cand.description,
+                            'alarm_index': int(idx),
+                            'alarm_class': cand.alarm_class,
+                            'occurrence_count': 1,
+                            'total_duration_mins': round(fault_dur, 2),
+                            'first_occurrence': last_on_ts,
+                            'resolution_time': off_ts,
+                            'mmbf_tick': False,
+                            'is_whitelisted': 'True' if int(idx) in whitelist_indices else 'False'
+                        })
 
-                            qualified_faults.append({
-                                'description': off_row['description'],
-                                'alarm_index': int(idx),
-                                'alarm_class': off_row['alarm_class'],
-                                'occurrence_count': 1,
-                                'total_duration_mins': round(fault_dur_min, 2),
-                                'first_occurrence': last_on_ts.strftime('%Y-%m-%d %H:%M:%S'),
-                                'resolution_time': off_ts.strftime('%Y-%m-%d %H:%M:%S'),
-                                'mmbf_tick': False,
-                                'is_whitelisted': 'True' if int(idx) in whitelist_indices else 'False'
-                            })
+            # 4. Aggregate & Metadata
+            w_start_str = w_start.strftime('%Y-%m-%d %H:%M:%S')
+            w_end_str = w_end.strftime('%Y-%m-%d %H:%M:%S')
 
-            # C. Aggregate
+            saved = meta_df[meta_df['session_start'] ==
+                            w_start_str] if not meta_df.empty else pd.DataFrame()
+
             summary = []
             if qualified_faults:
                 df_q = pd.DataFrame(qualified_faults)
-                for desc in df_q['description'].unique():
-                    f_grp = df_q[df_q['description'] == desc]
-                    idx = int(f_grp['alarm_index'].iloc[0])
 
-                    is_ticked = any(
-                        not saved.empty and saved.iloc[0]['is_mmbf'] and saved.iloc[0]['primary_issue'] == desc for _ in [0])
+                # Group by description to aggregate re-occurrences of same fault in one session
+                for desc, grp in df_q.groupby('description'):
+                    f_grp = grp
+                    first_idx = int(f_grp['alarm_index'].iloc[0])
 
-                    # Take the resolution time of the LAST occurrence if aggregated
-                    res_time_str = f_grp.sort_values(
+                    # Check if this specific issue was previously tagged as the MMBF cause
+                    is_ticked = False
+                    if not saved.empty:
+                        # Check if saved primary issue matches this group
+                        if saved.iloc[0]['is_mmbf'] and saved.iloc[0]['primary_issue'] == desc:
+                            is_ticked = True
+
+                    # Resolution time is the LAST time it turned off in this window
+                    res_time = f_grp.sort_values(
                         'resolution_time', ascending=False).iloc[0]['resolution_time']
+                    first_occ = f_grp['first_occurrence'].min()
 
                     summary.append({
                         'description': desc,
-                        'alarm_index': idx,
+                        'alarm_index': first_idx,
                         'alarm_class': f_grp['alarm_class'].iloc[0],
                         'occurrence_count': len(f_grp),
                         'total_duration_mins': f_grp['total_duration_mins'].sum(),
-                        'first_occurrence': f_grp['first_occurrence'].min(),
-                        'resolution_time': res_time_str,
+                        'first_occurrence': first_occ.strftime('%Y-%m-%d %H:%M:%S'),
+                        'resolution_time': res_time.strftime('%Y-%m-%d %H:%M:%S'),
                         'mmbf_tick': is_ticked,
-                        'is_whitelisted': 'True' if idx in whitelist_indices else 'False'
+                        'is_whitelisted': 'True' if first_idx in whitelist_indices else 'False',
+                        'raw_start_ts': first_occ  # For sorting
                     })
 
-            # D. Finalize Session Object
+            # Final Session Object
             if summary:
-                df_sum = pd.DataFrame(summary).sort_values(
-                    'first_occurrence', ascending=True)
+                # Sort faults by start time
+                df_sum = pd.DataFrame(summary).sort_values('raw_start_ts')
 
+                # Determine Header Info (MMBF Tag etc)
                 if not saved.empty:
-                    mmbf_tag, p_issue, p_index = 'Yes' if saved.iloc[0]['is_mmbf'] else 'No', saved.iloc[
-                        0]['primary_issue'], saved.iloc[0]['primary_index']
+                    mmbf_tag = 'Yes' if saved.iloc[0]['is_mmbf'] else 'No'
+                    p_issue = saved.iloc[0]['primary_issue']
+                    p_index = saved.iloc[0]['primary_index']
                 else:
-                    mmbf_tag, p_issue, p_index = 'No', df_sum.iloc[0][
-                        'description'], df_sum.iloc[0]['alarm_index']
+                    mmbf_tag = 'No'
+                    p_issue = df_sum.iloc[0]['description']
+                    p_index = df_sum.iloc[0]['alarm_index']
 
                 sessions.append({
                     'session_id': sid,
-                    'start_timestamp': start_str,
-                    'end_timestamp': end_str,
+                    'start_timestamp': w_start_str,
+                    'end_timestamp': w_end_str,
                     'session_duration_mins': w['duration'],
                     'primary_index': p_index,
                     'primary_issue': p_issue,
                     'mmbf_tag': mmbf_tag,
                     'is_whitelisted': 'True' if int(p_index) in whitelist_indices else 'False'
                 })
+                # Remove raw sort column before UI display
+                df_sum = df_sum.drop(columns=['raw_start_ts'])
                 details_map[str(sid)] = df_sum.to_dict('records')
             else:
                 sessions.append({
                     'session_id': sid,
-                    'start_timestamp': start_str,
-                    'end_timestamp': end_str,
+                    'start_timestamp': w_start_str,
+                    'end_timestamp': w_end_str,
                     'session_duration_mins': w['duration'],
                     'primary_index': 0,
                     'primary_issue': "No Pre-Existing Fault Resolved",
@@ -364,13 +402,10 @@ def get_maintenance_sessions(crane_id, start_date, end_date, db_path, whitelist_
                     'is_whitelisted': 'False'
                 })
 
-        if con:
-            con.close()
         return pd.DataFrame(sessions), details_map
+
     except Exception as e:
         print(f"[DEBUG] Session Analysis Error: {e}")
-        if con:
-            con.close()
         return pd.DataFrame(), {}
 
 
@@ -379,7 +414,6 @@ def get_explorer_logs(crane_id, start_date, end_date, index_filter, desc_filter,
     if not con:
         return pd.DataFrame()
 
-    # Fix: Cast to timestamp for correct date filtering
     query = f"""
         SELECT unit_id, alarm_date, alarm_time, alarm_index, alarm_class, description, alarm_state 
         FROM alarm_logs 
@@ -412,7 +446,7 @@ def get_explorer_logs(crane_id, start_date, end_date, index_filter, desc_filter,
 
 
 # --- DASHBOARD UI ---
-app = dash.Dash(__name__)
+app = dash.Dash(__name__, title="MMBF Tool")
 
 upload_btn_style = {
     'display': 'inline-block',
@@ -478,33 +512,35 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
     # Main Content
     dcc.Tabs(id="tabs-main", value='tab-audit', children=[
         dcc.Tab(label='Forensic Audit', value='tab-audit', children=[
-            html.Div(style={'display': 'flex', 'gap': '15px', 'padding': '20px', 'alignItems': 'flex-end'}, children=[
-                html.Div(style={'flex': 1, 'backgroundColor': 'white', 'padding': '15px', 'borderRadius': '8px', 'boxShadow': '0 1px 3px rgba(0,0,0,0.1)'}, children=[
-                         html.Label("Total Moves", style={'color': '#64748b', 'fontSize': '12px'}), html.H2(id='kpi-moves-val', style={'margin': '5px 0', 'color': '#0f172a'})]),
-                html.Div(style={'flex': 1, 'backgroundColor': 'white', 'padding': '15px', 'borderRadius': '8px', 'boxShadow': '0 1px 3px rgba(0,0,0,0.1)'}, children=[html.Label(
-                    "Failures per 1000 Moves", style={'color': '#64748b', 'fontSize': '12px'}), html.H2(id='mmbf-value', children="N/A", style={'margin': '5px 0', 'color': '#e11d48'})]),
-                html.Div(style={'flex': 1, 'backgroundColor': 'white', 'padding': '15px', 'borderRadius': '8px', 'boxShadow': '0 1px 3px rgba(0,0,0,0.1)'}, children=[html.Label(
-                    "MMBF Fault Count", style={'color': '#64748b', 'fontSize': '12px'}), html.H2(id='kpi-mmbf-count', children="0", style={'margin': '5px 0', 'color': '#2563eb'})]),
-                html.Div(style={'backgroundColor': 'white', 'padding': '15px', 'borderRadius': '8px', 'boxShadow': '0 1px 3px rgba(0,0,0,0.1)', 'display': 'flex', 'gap': '10px', 'alignItems': 'center'}, children=[
-                    html.Div([html.Label("Set Total Moves (Global):", style={'fontSize': '12px', 'display': 'block'}), dcc.Input(
-                        id='manual-move-input', type='number', placeholder='Fixed Total...', style={'width': '110px', 'padding': '5px'})]),
-                    html.Button("Set Total", id="save-moves-btn", style={'backgroundColor': '#2563eb', 'color': 'white',
-                                'border': 'none', 'padding': '8px 15px', 'borderRadius': '5px', 'cursor': 'pointer', 'marginTop': '15px'})
+            dcc.Loading(id="loading-audit", type="default", color="#1e293b", children=html.Div(style={'minHeight': '600px'}, children=[
+                html.Div(style={'display': 'flex', 'gap': '15px', 'padding': '20px', 'alignItems': 'flex-end'}, children=[
+                    html.Div(style={'flex': 1, 'backgroundColor': 'white', 'padding': '15px', 'borderRadius': '8px', 'boxShadow': '0 1px 3px rgba(0,0,0,0.1)'}, children=[
+                        html.Label("Total Moves", style={'color': '#64748b', 'fontSize': '12px'}), html.H2(id='kpi-moves-val', style={'margin': '5px 0', 'color': '#0f172a'})]),
+                    html.Div(style={'flex': 1, 'backgroundColor': 'white', 'padding': '15px', 'borderRadius': '8px', 'boxShadow': '0 1px 3px rgba(0,0,0,0.1)'}, children=[html.Label(
+                        "Failures per 1000 Moves", style={'color': '#64748b', 'fontSize': '12px'}), html.H2(id='mmbf-value', children="N/A", style={'margin': '5px 0', 'color': '#e11d48'})]),
+                    html.Div(style={'flex': 1, 'backgroundColor': 'white', 'padding': '15px', 'borderRadius': '8px', 'boxShadow': '0 1px 3px rgba(0,0,0,0.1)'}, children=[html.Label(
+                        "MMBF Fault Count", style={'color': '#64748b', 'fontSize': '12px'}), html.H2(id='kpi-mmbf-count', children="0", style={'margin': '5px 0', 'color': '#2563eb'})]),
+                    html.Div(style={'backgroundColor': 'white', 'padding': '15px', 'borderRadius': '8px', 'boxShadow': '0 1px 3px rgba(0,0,0,0.1)', 'display': 'flex', 'gap': '10px', 'alignItems': 'center'}, children=[
+                        html.Div([html.Label("Set Total Moves (Global):", style={'fontSize': '12px', 'display': 'block'}), dcc.Input(
+                            id='manual-move-input', type='number', placeholder='Fixed Total...', style={'width': '110px', 'padding': '5px'})]),
+                        html.Button("Set Total", id="save-moves-btn", style={'backgroundColor': '#2563eb', 'color': 'white',
+                                    'border': 'none', 'padding': '8px 15px', 'borderRadius': '5px', 'cursor': 'pointer', 'marginTop': '15px'})
+                    ]),
+                    html.Button("PDF Report", id="pdf-btn", style={'backgroundColor': '#0f172a', 'color': 'white',
+                                'border': 'none', 'padding': '15px 25px', 'borderRadius': '6px', 'cursor': 'pointer'})
                 ]),
-                html.Button("PDF Report", id="pdf-btn", style={'backgroundColor': '#0f172a', 'color': 'white',
-                            'border': 'none', 'padding': '15px 25px', 'borderRadius': '6px', 'cursor': 'pointer'})
-            ]),
-            html.Div(style={'padding': '0 20px'}, children=[dcc.Graph(
-                id='main-trend-graph', style={'height': '200px'})]),
-            html.Div(style={'padding': '20px', 'display': 'flex', 'flexDirection': 'column', 'gap': '25px'}, children=[
-                html.Div([html.H3("1. Executive Summary of Maintenance Sessions", style={'color': '#1e293b', 'marginBottom': '10px'}),
-                          dash_table.DataTable(id='session-table', sort_action="native", filter_action="native", row_selectable="single", page_size=10, style_header={'backgroundColor': '#dc2626', 'color': 'white', 'fontWeight': 'bold'}, style_cell={'textAlign': 'left', 'fontSize': '11px', 'padding': '10px'}, style_data_conditional=[{'if': {'column_id': 'mmbf_tag', 'filter_query': '{mmbf_tag} eq "Yes"'}, 'backgroundColor': '#fee2e2', 'color': '#b91c1c', 'fontWeight': 'bold'}, {'if': {'filter_query': '{is_whitelisted} eq "True"'}, 'backgroundColor': '#fef9c3'}])]),
-                html.Div([html.H3("2. Internal Fault Analysis (Session Focused)", style={'color': '#1e293b', 'marginBottom': '10px'}),
-                          dash_table.DataTable(id='detail-table', sort_action="native", filter_action="native", editable=True, page_size=10, style_header={'backgroundColor': '#dc2626', 'color': 'white', 'fontWeight': 'bold'}, style_cell={'textAlign': 'left', 'fontSize': '11px', 'padding': '10px'}, style_data_conditional=[{'if': {'filter_query': '{is_whitelisted} eq "True"'}, 'backgroundColor': '#fef9c3'}], dropdown={'mmbf_tick': {'options': [{'label': 'YES', 'value': True}, {'label': 'NO', 'value': False}]}})])
-            ])
+                html.Div(style={'padding': '0 20px'}, children=[dcc.Graph(
+                    id='main-trend-graph', style={'height': '200px'})]),
+                html.Div(style={'padding': '20px', 'display': 'flex', 'flexDirection': 'column', 'gap': '25px'}, children=[
+                    html.Div([html.H3("1. Executive Summary of Maintenance Sessions", style={'color': '#1e293b', 'marginBottom': '10px'}),
+                              dash_table.DataTable(id='session-table', sort_action="native", filter_action="native", row_selectable="single", page_size=10, style_header={'backgroundColor': '#dc2626', 'color': 'white', 'fontWeight': 'bold'}, style_cell={'textAlign': 'left', 'fontSize': '11px', 'padding': '10px'}, style_data_conditional=[{'if': {'column_id': 'mmbf_tag', 'filter_query': '{mmbf_tag} eq "Yes"'}, 'backgroundColor': '#fee2e2', 'color': '#b91c1c', 'fontWeight': 'bold'}, {'if': {'filter_query': '{is_whitelisted} eq "True"'}, 'backgroundColor': '#fef9c3'}])]),
+                    html.Div([html.H3("2. Internal Fault Analysis (Session Focused)", style={'color': '#1e293b', 'marginBottom': '10px'}),
+                              dash_table.DataTable(id='detail-table', sort_action="native", filter_action="native", editable=True, page_size=10, style_header={'backgroundColor': '#dc2626', 'color': 'white', 'fontWeight': 'bold'}, style_cell={'textAlign': 'left', 'fontSize': '11px', 'padding': '10px'}, style_data_conditional=[{'if': {'filter_query': '{is_whitelisted} eq "True"'}, 'backgroundColor': '#fef9c3'}], dropdown={'mmbf_tick': {'options': [{'label': 'YES', 'value': True}, {'label': 'NO', 'value': False}]}})])
+                ])
+            ]))
         ]),
         dcc.Tab(label='Data Explorer', value='tab-explorer', children=[
-            html.Div(style={'padding': '20px', 'display': 'flex', 'gap': '20px'}, children=[
+            dcc.Loading(id="loading-explorer", type="default", color="#1e293b", children=html.Div(style={'padding': '20px', 'display': 'flex', 'gap': '20px'}, children=[
                 html.Div(style={'flex': '2'}, children=[
                     html.Div(style={'backgroundColor': 'white', 'padding': '20px', 'borderRadius': '8px', 'boxShadow': '0 1px 3px rgba(0,0,0,0.1)', 'marginBottom': '20px', 'display': 'flex', 'gap': '20px', 'alignItems': 'flex-end'}, children=[
                         html.Div([html.Label("Search Index:", style={'fontSize': '12px'}), dcc.Input(
@@ -521,7 +557,7 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
                     html.Div([html.H3("Active Whitelist"), html.P("Loaded from CSV", style={'fontSize': '11px', 'color': '#64748b'}),
                               dash_table.DataTable(id='whitelist-display-table', columns=[{"name": "Index", "id": "alarm_index"}, {"name": "Description", "id": "description"}], page_size=20, style_header={'backgroundColor': '#dc2626', 'color': 'white', 'fontWeight': 'bold'}, style_cell={'textAlign': 'left', 'fontSize': '11px', 'padding': '10px', 'whiteSpace': 'normal', 'height': 'auto'})])
                 ])
-            ])
+            ]))
         ])
     ]),
     dcc.Download(id="download-pdf-report")
@@ -708,7 +744,7 @@ def generate_pdf_report(n, session_data, details_data, crane_id, total_moves, st
     pdf.set_font("Helvetica", "", 10)
     pdf.cell(0, 7, f"Period: {start_date} to {end_date}", ln=True)
     pdf.cell(
-        0, 7, f"Total Moves: {total_moves:,} | Failures per 1000 Moves: {mmbf_val}", ln=True)
+        0, 7, f"Total Moves: {total_moves} | Failures per 1000 Moves: {mmbf_val}", ln=True)
     pdf.ln(10)
 
     pdf.set_font("Helvetica", "B", 10)
