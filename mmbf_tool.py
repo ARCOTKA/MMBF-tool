@@ -1,6 +1,6 @@
 """
 Forensic analysis tool for RMG Fleet (RMG01 - RMG12) maintenance logs.
-Version: 8.3 - Fix: Default Duration set to 0 to capture short maintenance events.
+Version: 8.5 - Features: Jump-to-Page Navigation (No Filter), Fixed DatePicker
 """
 
 import io
@@ -13,7 +13,7 @@ from dash import dcc, html, dash_table, Input, Output, State, callback_context
 from fpdf import FPDF
 import os
 from datetime import date
-from functools import lru_cache
+import math
 
 # --- CONFIGURATION (DEFAULTS) ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -24,10 +24,10 @@ CRANE_LIST = [f'RMG{str(i).zfill(2)}' for i in range(1, 13)]
 
 # Alarm Index Constants
 MANUAL_MODE_INDEX = 57011
-# UPDATED: Changed from 15 to 0 to capture all maintenance events by default
 DEFAULT_MIN_DURATION = 0
 TWISTLOCK_LOCKED_INDEX = 5740
 TWISTLOCK_UNLOCKED_INDEX = 5741
+PAGE_SIZE = 20  # Constant for pagination calculations
 
 # --- HELPER FUNCTIONS ---
 
@@ -399,6 +399,7 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
     dcc.Store(id='moves-store'),
     dcc.Store(id='current-db-path', data=DEFAULT_DB_PATH),
     dcc.Store(id='whitelist-data-store', data=load_default_whitelist()),
+    dcc.Store(id='target-session-store'),  # Stores ID for jump navigation
 
     # Header
     html.Div(style={'backgroundColor': '#1e293b', 'padding': '20px', 'color': 'white', 'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center'}, children=[
@@ -421,12 +422,23 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
                 html.Div(id='config-status', children="Default Configuration Loaded", style={
                          'fontSize': '10px', 'color': '#64748b', 'marginTop': '5px', 'fontStyle': 'italic'})
             ]),
-            html.Div([html.Label("Analysis Period:", style={'fontSize': '12px', 'color': '#94a3b8', 'display': 'block'}),
-                      dcc.DatePickerRange(id='date-picker', style={'fontSize': '12px'})]),
+            html.Div([
+                html.Label("Analysis Period:", style={
+                           'fontSize': '12px', 'color': '#94a3b8', 'display': 'block'}),
+                # FIXED: Added container style to prevent squash
+                html.Div(style={'backgroundColor': 'white', 'borderRadius': '4px', 'overflow': 'hidden'}, children=[
+                    dcc.DatePickerRange(
+                        id='date-picker',
+                        style={'fontSize': '12px', 'border': 'none'},
+                        start_date_placeholder_text="Start",
+                        end_date_placeholder_text="End",
+                        clearable=False
+                    )
+                ])
+            ]),
             html.Div([html.Label("Asset Identifier:", style={'fontSize': '12px', 'color': '#94a3b8', 'display': 'block'}),
                       dcc.Dropdown(id='crane-selector', options=[{'label': c, 'value': c} for c in CRANE_LIST], value='RMG05', clearable=False, style={'width': '120px', 'color': '#1e293b'})]),
             html.Div([html.Label("Min Duration (min):", style={'fontSize': '12px', 'color': '#94a3b8', 'display': 'block'}),
-                      # UPDATED: Default value set to 0 here as well
                       dcc.Input(id='min-duration-input', type='number', value=0, min=0, step=1, style={'width': '100px', 'color': '#1e293b', 'borderRadius': '4px', 'border': 'none', 'padding': '4px'})])
         ])
     ]),
@@ -494,7 +506,7 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
                 ]),
                 html.Div([
                     html.H3("Raw Alarm Logs (Session Context Highlighted)"),
-                    dash_table.DataTable(id='explorer-table', sort_action="native", filter_action="native", page_size=20, style_header={
+                    dash_table.DataTable(id='explorer-table', sort_action="native", filter_action="native", page_size=PAGE_SIZE, style_header={
                                          'backgroundColor': '#dc2626', 'color': 'white', 'fontWeight': 'bold'}, style_cell={'textAlign': 'left', 'fontSize': '11px', 'padding': '8px'})
                 ])
             ]))
@@ -583,6 +595,14 @@ def update_crane_and_moves(crane_id, start_date, end_date, n_clicks, db_path, wh
 def update_table_data(data):
     cols = [{"name": i, "id": j} for i, j in [("ID", "session_id"), ("Start", "start_timestamp"), ("End", "end_timestamp"), (
         "Duration (min)", "session_duration_mins"), ("Index", "primary_index"), ("Primary Root Cause", "primary_issue"), ("MMBF?", "mmbf_tag")]]
+
+    # Add Link Column
+    cols.append({"name": "Logs", "id": "view_logs"})
+
+    if data:
+        for row in data:
+            row['view_logs'] = "🔍 View"
+
     return cols, data or []
 
 
@@ -642,19 +662,20 @@ def sync_and_save_mmbf(ts, detail_data, selected_rows, current_table, session_st
 
 
 @app.callback(
-    [Output('explorer-table', 'columns'), Output('explorer-table',
-                                                 'data'), Output('explorer-table', 'style_data_conditional')],
-    [Input('tabs-main', 'value'), Input('explorer-btn', 'n_clicks'),
+    [Output('explorer-table', 'columns'), Output('explorer-table', 'data'),
+     Output('explorer-table', 'style_data_conditional'), Output('explorer-table', 'page_current')],
+    [Input('tabs-main', 'value'), Input('explorer-btn', 'n_clicks'), Input('target-session-store', 'data'),
      Input('crane-selector', 'value'), Input('date-picker',
                                              'start_date'), Input('date-picker', 'end_date'),
      Input('current-db-path', 'data'), Input('whitelist-data-store', 'data'),
      Input('session-store', 'data'), Input('details-store', 'data')],
-    [State('explorer-index-input', 'value'), State('explorer-desc-input',
-                                                   'value'), State('explorer-view-mode', 'value')]
+    [State('explorer-index-input', 'value'), State('explorer-desc-input', 'value'),
+     State('explorer-view-mode', 'value')]
 )
-def update_explorer_tab(tab, n, crane_id, start, end, db_path, whitelist_data, session_data, details_data, idx_filter, desc_filter, view_mode):
+def update_explorer_tab(tab, n, target_sid, crane_id, start, end, db_path, whitelist_data, session_data, details_data, idx_filter, desc_filter, view_mode):
+    # Only update if the tab is visible OR if we just targeted a session (which implies tab switch imminent)
     if tab != 'tab-explorer':
-        return [], [], []
+        return [], [], [], 0
 
     whitelist_indices = {int(x['alarm_index'])
                          for x in whitelist_data} if whitelist_data else set()
@@ -664,85 +685,87 @@ def update_explorer_tab(tab, n, crane_id, start, end, db_path, whitelist_data, s
     df_logs = get_explorer_logs(crane_id, start, end, idx_filter, desc_filter,
                                 db_path, whitelist_indices, only_whitelist=only_whitelist)
     if df_logs.empty:
-        return [], [], []
+        return [], [], [], 0
 
-    # 2. Build Highlighting Map (Timestamp + Index -> Session ID)
-    # Palette: Light Blue, Light Green, Light Purple, Light Orange, Light Pink, Light Cyan
+    # 2. Build Highlighting Map & Tag Session Context
     PALETTE = ['#dbeafe', '#dcfce7', '#f3e8ff',
                '#ffedd5', '#fce7f3', '#cffafe']
-
-    # We create a set of match keys: (timestamp_string, alarm_index_int)
-    # And map them to a color code
-
-    highlight_map = {}
+    df_logs['session_context'] = ''  # Initialize Column
+    df_logs['matched_session_id'] = None
 
     if session_data:
         for i, session in enumerate(session_data):
             sid = str(session['session_id'])
-            # Cycle through palette
             color = PALETTE[i % len(PALETTE)]
-
-            # A) Highlight Manual Mode (57011) WITHIN this session
-            # We filter the raw dataframe in memory to find matching rows for this session window
             s_start = pd.Timestamp(session['start_timestamp'])
             s_end = pd.Timestamp(session['end_timestamp'])
 
-            # Identify 57011 rows in this specific window
-            # We use the raw dataframe fetched above.
-            # Note: This is efficient for small-medium datasets (20 page size helps render, but we process full DF here)
+            # A) Tag Manual Mode 57011
             mask_manual = (df_logs['alarm_index'] == MANUAL_MODE_INDEX) & \
                           (df_logs['full_ts'] >= s_start) & \
                           (df_logs['full_ts'] <= s_end)
 
-            # We mark these rows with the session ID
             df_logs.loc[mask_manual, 'matched_session_id'] = sid
             df_logs.loc[mask_manual, 'row_color'] = color
+            df_logs.loc[mask_manual, 'session_context'] = f"Session {sid}"
 
-            # B) Highlight Linked Faults
-            # Look up details for this session
+            # B) Tag Linked Faults
             faults = details_data.get(sid, []) if details_data else []
-
             for f in faults:
                 f_idx = int(f['alarm_index'])
-                # Start Time (First Occurrence)
                 f_start_ts = pd.Timestamp(f['first_occurrence'])
-                # End Time (Resolution)
                 f_end_ts = pd.Timestamp(f['resolution_time'])
 
-                # Highlight rows that match Index AND (Start OR End Time)
-                # We relax match slightly to allow for millisecond differences if any, though exact match preferred
-                # Using string matching on the formatted timestamp from DB is safest if logic preserved it
-
-                # Check Start
+                # Tag Start
                 mask_fault_start = (df_logs['alarm_index'] == f_idx) & (
                     df_logs['full_ts'] == f_start_ts)
                 df_logs.loc[mask_fault_start, 'row_color'] = color
+                df_logs.loc[mask_fault_start,
+                            'session_context'] = f"Session {sid}"
 
-                # Check End
+                # Tag End
                 mask_fault_end = (df_logs['alarm_index'] == f_idx) & (
                     df_logs['full_ts'] == f_end_ts)
                 df_logs.loc[mask_fault_end, 'row_color'] = color
+                df_logs.loc[mask_fault_end,
+                            'session_context'] = f"Session {sid}"
 
-    # 3. Generate Style Conditions
-    # We essentially need to tell the DataTable: "If row_color column is X, set background to X"
-    # The 'row_color' column will be hidden, but accessible for logic
-
+    # 3. Calculate Styles
     styles = []
-    # Add unique colors found to styles
     if 'row_color' in df_logs.columns:
         unique_colors = df_logs['row_color'].dropna().unique()
         for c in unique_colors:
             styles.append({
                 'if': {'filter_query': f'{{row_color}} eq "{c}"'},
                 'backgroundColor': c,
-                'color': 'black'  # Ensure text is readable
+                'color': 'black'
             })
 
-    # Columns to display (exclude internal columns)
+    # 4. Define Columns (Ensure session_context is included)
     cols = [{"name": i.replace('_', ' ').title(), "id": i} for i in df_logs.columns
             if i not in ['is_whitelisted', 'full_ts', 'matched_session_id', 'row_color']]
 
-    return cols, df_logs.to_dict('records'), styles
+    # 5. Jump to Page Logic
+    page_current = 0
+    if target_sid:
+        # Find the first row that matches this session ID
+        # Since logs are sorted DESC by default, we just find the first occurrence
+        # or we might want the *start* of the session? In desc order, start is later in index?
+        # Actually, let's just find any row belonging to the session to bring it into view.
+
+        # We look for rows where 'session_context' contains 'Session {target_sid}'
+        target_str = f"Session {target_sid}"
+
+        # Get integer locations (indices) of matching rows
+        matches = df_logs.index[df_logs['session_context']
+                                == target_str].tolist()
+
+        if matches:
+            first_match_index = matches[0]  # Index in the current dataframe
+            # Calculate page number
+            page_current = math.floor(first_match_index / PAGE_SIZE)
+
+    return cols, df_logs.to_dict('records'), styles, page_current
 
 
 @app.callback(
@@ -858,6 +881,33 @@ def update_graph(data):
     fig.update_layout(margin=dict(l=20, r=20, t=40, b=20), paper_bgcolor='rgba(0,0,0,0)',
                       plot_bgcolor='rgba(0,0,0,0)', xaxis=dict(type='category'))
     return fig
+
+# UPDATED: Jump Logic (No Filter, Just Page Navigation)
+
+
+@app.callback(
+    [Output('tabs-main', 'value'), Output('target-session-store', 'data')],
+    [Input('session-table', 'active_cell')],
+    [State('session-table', 'derived_virtual_data')],
+    prevent_initial_call=True
+)
+def jump_to_session_log(active_cell, rows):
+    if not active_cell or not rows:
+        return dash.no_update, dash.no_update
+
+    if active_cell['column_id'] == 'view_logs':
+        try:
+            row_idx = active_cell['row']
+            if row_idx < len(rows):
+                sid = rows[row_idx].get('session_id')
+                # We return 'tab-explorer' to switch tabs
+                # We set 'target-session-store' to the Session ID we want to jump to
+                return 'tab-explorer', sid
+        except Exception as e:
+            print(f"Jump Error: {e}")
+            pass
+
+    return dash.no_update, dash.no_update
 
 
 if __name__ == '__main__':
