@@ -1,6 +1,6 @@
 """
 Forensic analysis tool for RMG Fleet (RMG01 - RMG12) maintenance logs.
-Version: 8.0 - Performance Optimized (In-Memory Processing) + Loading Indicators
+Version: 8.1 - Enhanced Filtering & Layout Updates
 """
 
 import io
@@ -409,7 +409,7 @@ def get_maintenance_sessions(crane_id, start_date, end_date, db_path, whitelist_
         return pd.DataFrame(), {}
 
 
-def get_explorer_logs(crane_id, start_date, end_date, index_filter, desc_filter, db_path, whitelist_indices):
+def get_explorer_logs(crane_id, start_date, end_date, index_filter, desc_filter, db_path, whitelist_indices, only_whitelist=False):
     con = get_db_con(db_path)
     if not con:
         return pd.DataFrame()
@@ -423,6 +423,16 @@ def get_explorer_logs(crane_id, start_date, end_date, index_filter, desc_filter,
     """
     params = [crane_id]
 
+    if only_whitelist:
+        if whitelist_indices:
+            # Safe injection for list of integers
+            wl_str = ", ".join(map(str, whitelist_indices))
+            query += f" AND alarm_index IN ({wl_str})"
+        else:
+            # Whitelist required but empty -> return empty
+            con.close()
+            return pd.DataFrame()
+
     if index_filter:
         query += " AND CAST(alarm_index AS VARCHAR) LIKE ?"
         params.append(f"%{index_filter}%")
@@ -430,7 +440,8 @@ def get_explorer_logs(crane_id, start_date, end_date, index_filter, desc_filter,
         query += " AND description ILIKE ?"
         params.append(f"%{desc_filter}%")
 
-    query += " ORDER BY (alarm_date || ' ' || alarm_time)::TIMESTAMP DESC LIMIT 5000"
+    # Removed LIMIT 5000 as requested
+    query += " ORDER BY (alarm_date || ' ' || alarm_time)::TIMESTAMP DESC"
 
     try:
         df = con.execute(query, params).df()
@@ -534,28 +545,64 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
                 html.Div(style={'padding': '20px', 'display': 'flex', 'flexDirection': 'column', 'gap': '25px'}, children=[
                     html.Div([html.H3("1. Executive Summary of Maintenance Sessions", style={'color': '#1e293b', 'marginBottom': '10px'}),
                               dash_table.DataTable(id='session-table', sort_action="native", filter_action="native", row_selectable="single", page_size=10, style_header={'backgroundColor': '#dc2626', 'color': 'white', 'fontWeight': 'bold'}, style_cell={'textAlign': 'left', 'fontSize': '11px', 'padding': '10px'}, style_data_conditional=[{'if': {'column_id': 'mmbf_tag', 'filter_query': '{mmbf_tag} eq "Yes"'}, 'backgroundColor': '#fee2e2', 'color': '#b91c1c', 'fontWeight': 'bold'}, {'if': {'filter_query': '{is_whitelisted} eq "True"'}, 'backgroundColor': '#fef9c3'}])]),
-                    html.Div([html.H3("2. Internal Fault Analysis (Session Focused)", style={'color': '#1e293b', 'marginBottom': '10px'}),
-                              dash_table.DataTable(id='detail-table', sort_action="native", filter_action="native", editable=True, page_size=10, style_header={'backgroundColor': '#dc2626', 'color': 'white', 'fontWeight': 'bold'}, style_cell={'textAlign': 'left', 'fontSize': '11px', 'padding': '10px'}, style_data_conditional=[{'if': {'filter_query': '{is_whitelisted} eq "True"'}, 'backgroundColor': '#fef9c3'}], dropdown={'mmbf_tick': {'options': [{'label': 'YES', 'value': True}, {'label': 'NO', 'value': False}]}})])
+
+                    html.Div([
+                        html.Div([
+                             html.H3("2. Internal Fault Analysis (Session Focused)", style={
+                                     'color': '#1e293b', 'display': 'inline-block', 'marginRight': '20px'}),
+                             html.Div([
+                                 html.Label("Filter:", style={
+                                            'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '12px'}),
+                                 dcc.RadioItems(
+                                     id='detail-view-mode',
+                                     options=[
+                                        {'label': ' All Faults', 'value': 'ALL'},
+                                        {'label': ' Whitelist Only', 'value': 'WL'}
+                                     ],
+                                     value='ALL',
+                                     inline=True,
+                                     style={'display': 'inline-block',
+                                            'fontSize': '12px'}
+                                 )
+                             ], style={'display': 'inline-block', 'verticalAlign': 'middle'})
+                             ], style={'marginBottom': '10px'}),
+                        dash_table.DataTable(id='detail-table', sort_action="native", filter_action="native", editable=True, page_size=10, style_header={'backgroundColor': '#dc2626', 'color': 'white', 'fontWeight': 'bold'}, style_cell={
+                                             'textAlign': 'left', 'fontSize': '11px', 'padding': '10px'}, style_data_conditional=[{'if': {'filter_query': '{is_whitelisted} eq "True"'}, 'backgroundColor': '#fef9c3'}], dropdown={'mmbf_tick': {'options': [{'label': 'YES', 'value': True}, {'label': 'NO', 'value': False}]}})
+                    ])
                 ])
             ]))
         ]),
         dcc.Tab(label='Data Explorer', value='tab-explorer', children=[
-            dcc.Loading(id="loading-explorer", type="default", color="#1e293b", children=html.Div(style={'padding': '20px', 'display': 'flex', 'gap': '20px'}, children=[
-                html.Div(style={'flex': '2'}, children=[
-                    html.Div(style={'backgroundColor': 'white', 'padding': '20px', 'borderRadius': '8px', 'boxShadow': '0 1px 3px rgba(0,0,0,0.1)', 'marginBottom': '20px', 'display': 'flex', 'gap': '20px', 'alignItems': 'flex-end'}, children=[
-                        html.Div([html.Label("Search Index:", style={'fontSize': '12px'}), dcc.Input(
-                            id='explorer-index-input', type='text', placeholder='Index...', style={'padding': '8px', 'borderRadius': '4px', 'border': '1px solid #ddd'})]),
-                        html.Div([html.Label("Search Description:", style={'fontSize': '12px'}), dcc.Input(
-                            id='explorer-desc-input', type='text', placeholder='Keyword...', style={'padding': '8px', 'borderRadius': '4px', 'border': '1px solid #ddd', 'width': '300px'})]),
-                        html.Button("Apply Filter", id="explorer-btn", style={
-                                    'backgroundColor': '#1e293b', 'color': 'white', 'padding': '8px 20px', 'borderRadius': '4px', 'border': 'none', 'cursor': 'pointer'})
+            dcc.Loading(id="loading-explorer", type="default", color="#1e293b", children=html.Div(style={'padding': '20px'}, children=[
+                html.Div(style={'backgroundColor': 'white', 'padding': '20px', 'borderRadius': '8px', 'boxShadow': '0 1px 3px rgba(0,0,0,0.1)', 'marginBottom': '20px', 'display': 'flex', 'gap': '20px', 'alignItems': 'center', 'flexWrap': 'wrap'}, children=[
+                    html.Div([html.Label("Search Index:", style={'fontSize': '12px'}), dcc.Input(
+                        id='explorer-index-input', type='text', placeholder='Index...', style={'padding': '8px', 'borderRadius': '4px', 'border': '1px solid #ddd'})]),
+                    html.Div([html.Label("Search Description:", style={'fontSize': '12px'}), dcc.Input(
+                        id='explorer-desc-input', type='text', placeholder='Keyword...', style={'padding': '8px', 'borderRadius': '4px', 'border': '1px solid #ddd', 'width': '300px'})]),
+
+                    html.Div([
+                        html.Label("Filter:", style={
+                                   'fontSize': '12px', 'display': 'block'}),
+                        dcc.RadioItems(
+                            id='explorer-view-mode',
+                            options=[
+                                {'label': ' All Faults', 'value': 'ALL'},
+                                {'label': ' Whitelist Only', 'value': 'WL'}
+                            ],
+                            value='ALL',
+                            inline=True,
+                            style={'fontSize': '12px'}
+                        )
                     ]),
-                    html.Div([html.H3("Raw Alarm Logs (Latest 5000 Entries)"), dash_table.DataTable(id='explorer-table', sort_action="native", filter_action="native", page_size=20, style_header={
-                             'backgroundColor': '#dc2626', 'color': 'white', 'fontWeight': 'bold'}, style_cell={'textAlign': 'left', 'fontSize': '11px', 'padding': '8px'}, style_data_conditional=[{'if': {'filter_query': '{is_whitelisted} eq "True"'}, 'backgroundColor': '#fef9c3'}])])
+
+                    html.Button("Apply Filter", id="explorer-btn", style={
+                                'backgroundColor': '#1e293b', 'color': 'white', 'padding': '8px 20px', 'borderRadius': '4px', 'border': 'none', 'cursor': 'pointer'})
                 ]),
-                html.Div(style={'flex': '1'}, children=[
-                    html.Div([html.H3("Active Whitelist"), html.P("Loaded from CSV", style={'fontSize': '11px', 'color': '#64748b'}),
-                              dash_table.DataTable(id='whitelist-display-table', columns=[{"name": "Index", "id": "alarm_index"}, {"name": "Description", "id": "description"}], page_size=20, style_header={'backgroundColor': '#dc2626', 'color': 'white', 'fontWeight': 'bold'}, style_cell={'textAlign': 'left', 'fontSize': '11px', 'padding': '10px', 'whiteSpace': 'normal', 'height': 'auto'})])
+
+                html.Div([
+                    html.H3("Raw Alarm Logs (All Entries)"),
+                    dash_table.DataTable(id='explorer-table', sort_action="native", filter_action="native", page_size=50, style_header={
+                        'backgroundColor': '#dc2626', 'color': 'white', 'fontWeight': 'bold'}, style_cell={'textAlign': 'left', 'fontSize': '11px', 'padding': '8px'}, style_data_conditional=[{'if': {'filter_query': '{is_whitelisted} eq "True"'}, 'backgroundColor': '#fef9c3'}])
                 ])
             ]))
         ])
@@ -650,12 +697,20 @@ def update_table_data(data):
     return cols, data or []
 
 
-@app.callback([Output('detail-table', 'columns'), Output('detail-table', 'data')], [Input('session-table', 'selected_rows'), State('session-table', 'data'), State('details-store', 'data')])
-def update_details(selected, session_data, details):
+@app.callback([Output('detail-table', 'columns'), Output('detail-table', 'data')],
+              [Input('session-table', 'selected_rows'),
+               Input('detail-view-mode', 'value')],
+              [State('session-table', 'data'), State('details-store', 'data')])
+def update_details(selected, view_mode, session_data, details):
     if not selected or not session_data:
         return [], []
     sid = str(session_data[selected[0]]['session_id'])
     rows = details.get(sid, [])
+
+    # Filter based on radio button
+    if view_mode == 'WL':
+        rows = [r for r in rows if r.get('is_whitelisted') == 'True']
+
     cols = [
         {"name": "Start Time", "id": "first_occurrence"},
         {"name": "End Time", "id": "resolution_time"},
@@ -703,25 +758,28 @@ def sync_and_save_mmbf(ts, detail_data, selected_rows, current_table, session_st
     return session_store, mmbf_val, str(mmbf_count)
 
 
-@app.callback([Output('explorer-table', 'columns'), Output('explorer-table', 'data'), Output('whitelist-display-table', 'data')],
+@app.callback([Output('explorer-table', 'columns'), Output('explorer-table', 'data')],
               [Input('tabs-main', 'value'), Input('explorer-btn', 'n_clicks'), Input('crane-selector', 'value'), Input('date-picker',
                                                                                                                        'start_date'), Input('date-picker', 'end_date'), Input('current-db-path', 'data'), Input('whitelist-data-store', 'data')],
-              [State('explorer-index-input', 'value'), State('explorer-desc-input', 'value')])
-def update_explorer_tab(tab, n, crane_id, start, end, db_path, whitelist_data, idx_filter, desc_filter):
+              [State('explorer-index-input', 'value'), State('explorer-desc-input', 'value'), State('explorer-view-mode', 'value')])
+def update_explorer_tab(tab, n, crane_id, start, end, db_path, whitelist_data, idx_filter, desc_filter, view_mode):
     if tab != 'tab-explorer':
-        return [], [], whitelist_data or []
+        return [], []
 
     whitelist_indices = {int(x['alarm_index'])
                          for x in whitelist_data} if whitelist_data else set()
+
+    only_whitelist = (view_mode == 'WL')
+
     df_logs = get_explorer_logs(
-        crane_id, start, end, idx_filter, desc_filter, db_path, whitelist_indices)
+        crane_id, start, end, idx_filter, desc_filter, db_path, whitelist_indices, only_whitelist=only_whitelist)
 
     if df_logs.empty:
-        return [], [], whitelist_data or []
+        return [], []
 
     cols = [{"name": i.replace('_', ' ').title(), "id": i}
             for i in df_logs.columns if i != 'is_whitelisted']
-    return cols, df_logs.to_dict('records'), whitelist_data or []
+    return cols, df_logs.to_dict('records')
 
 
 @app.callback(
