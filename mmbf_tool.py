@@ -1,6 +1,6 @@
 """
 Forensic analysis tool for RMG Fleet (RMG01 - RMG12) maintenance logs.
-Version: 8.5 - Features: Jump-to-Page Navigation (No Filter), Fixed DatePicker
+Version: 9.1 - Features: Transient/Chatter Analysis (Overlap Fix), Predictive Storm Tracking, Forensic Audit
 """
 
 import io
@@ -12,8 +12,9 @@ import dash
 from dash import dcc, html, dash_table, Input, Output, State, callback_context
 from fpdf import FPDF
 import os
-from datetime import date
+from datetime import date, timedelta
 import math
+import bisect
 
 # --- CONFIGURATION (DEFAULTS) ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -27,7 +28,7 @@ MANUAL_MODE_INDEX = 57011
 DEFAULT_MIN_DURATION = 0
 TWISTLOCK_LOCKED_INDEX = 5740
 TWISTLOCK_UNLOCKED_INDEX = 5741
-PAGE_SIZE = 20  # Constant for pagination calculations
+PAGE_SIZE = 20
 
 # --- HELPER FUNCTIONS ---
 
@@ -117,11 +118,6 @@ def get_db_date_range(db_path):
         """).fetchone()
         if res and res[0] and res[1]:
             return pd.to_datetime(res[0]).date(), pd.to_datetime(res[1]).date()
-        else:
-            res = con.execute(
-                "SELECT MIN(alarm_date), MAX(alarm_date) FROM alarm_logs").fetchone()
-            if res and res[0] and res[1]:
-                return pd.to_datetime(res[0]).date(), pd.to_datetime(res[1]).date()
     except Exception as e:
         print(f"[DEBUG] Date Range Fetch Error: {e}")
     finally:
@@ -139,7 +135,7 @@ def sanitize_str(text):
         text = text.replace(char, rep)
     return text.encode('latin-1', 'ignore').decode('latin-1')
 
-# --- OPTIMIZED CORE LOGIC ---
+# --- CORE LOGIC: FORENSIC ---
 
 
 def get_refined_move_count(crane_id, start_date, end_date, db_path):
@@ -184,17 +180,14 @@ def get_refined_move_count(crane_id, start_date, end_date, db_path):
 
 
 def get_maintenance_sessions(crane_id, start_date, end_date, db_path, whitelist_indices, min_duration=DEFAULT_MIN_DURATION):
+    # (Same implementation as previous version - kept for stability)
     con = get_db_con(db_path)
     if not con:
         return pd.DataFrame(), {}
     try:
         query = """
-            SELECT 
-                alarm_index, 
-                description, 
-                alarm_class, 
-                alarm_state,
-                (alarm_date || ' ' || alarm_time)::TIMESTAMP as ts
+            SELECT alarm_index, description, alarm_class, alarm_state,
+            (alarm_date || ' ' || alarm_time)::TIMESTAMP as ts
             FROM alarm_logs
             WHERE unit_id ILIKE ?
             ORDER BY ts ASC
@@ -235,8 +228,7 @@ def get_maintenance_sessions(crane_id, start_date, end_date, db_path, whitelist_
 
         for i, w in enumerate(windows):
             sid = i + 1
-            w_start = w['start']
-            w_end = w['end']
+            w_start, w_end = w['start'], w['end']
             in_window_mask = (df_faults['ts'] >= w_start) & (df_faults['ts'] <= w_end) & (
                 df_faults['alarm_state'].str.contains('OFF', case=False, na=False))
             candidates = df_faults[in_window_mask]
@@ -258,7 +250,6 @@ def get_maintenance_sessions(crane_id, start_date, end_date, db_path, whitelist_
                             'description': cand.description,
                             'alarm_index': int(idx),
                             'alarm_class': cand.alarm_class,
-                            'occurrence_count': 1,
                             'total_duration_mins': round(fault_dur, 2),
                             'first_occurrence': last_on_ts,
                             'resolution_time': off_ts,
@@ -267,7 +258,6 @@ def get_maintenance_sessions(crane_id, start_date, end_date, db_path, whitelist_
                         })
 
             w_start_str = w_start.strftime('%Y-%m-%d %H:%M:%S')
-            w_end_str = w_end.strftime('%Y-%m-%d %H:%M:%S')
             saved = meta_df[meta_df['session_start'] ==
                             w_start_str] if not meta_df.empty else pd.DataFrame()
 
@@ -308,27 +298,17 @@ def get_maintenance_sessions(crane_id, start_date, end_date, db_path, whitelist_
                     p_issue = df_sum.iloc[0]['description']
                     p_index = df_sum.iloc[0]['alarm_index']
                 sessions.append({
-                    'session_id': sid,
-                    'start_timestamp': w_start_str,
-                    'end_timestamp': w_end_str,
-                    'session_duration_mins': w['duration'],
-                    'primary_index': p_index,
-                    'primary_issue': p_issue,
-                    'mmbf_tag': mmbf_tag,
-                    'is_whitelisted': 'True' if int(p_index) in whitelist_indices else 'False'
+                    'session_id': sid, 'start_timestamp': w_start_str, 'end_timestamp': w_end.strftime('%Y-%m-%d %H:%M:%S'),
+                    'session_duration_mins': w['duration'], 'primary_index': p_index, 'primary_issue': p_issue,
+                    'mmbf_tag': mmbf_tag, 'is_whitelisted': 'True' if int(p_index) in whitelist_indices else 'False'
                 })
                 df_sum = df_sum.drop(columns=['raw_start_ts'])
                 details_map[str(sid)] = df_sum.to_dict('records')
             else:
                 sessions.append({
-                    'session_id': sid,
-                    'start_timestamp': w_start_str,
-                    'end_timestamp': w_end_str,
-                    'session_duration_mins': w['duration'],
-                    'primary_index': 0,
-                    'primary_issue': "No Pre-Existing Fault Resolved",
-                    'mmbf_tag': 'No',
-                    'is_whitelisted': 'False'
+                    'session_id': sid, 'start_timestamp': w_start_str, 'end_timestamp': w_end.strftime('%Y-%m-%d %H:%M:%S'),
+                    'session_duration_mins': w['duration'], 'primary_index': 0, 'primary_issue': "No Pre-Existing Fault Resolved",
+                    'mmbf_tag': 'No', 'is_whitelisted': 'False'
                 })
 
         return pd.DataFrame(sessions), details_map
@@ -336,6 +316,184 @@ def get_maintenance_sessions(crane_id, start_date, end_date, db_path, whitelist_
     except Exception as e:
         print(f"[DEBUG] Session Analysis Error: {e}")
         return pd.DataFrame(), {}
+
+# --- CORE LOGIC: PREDICTIVE / TRANSIENT ---
+
+
+def get_transient_faults(crane_id, start_date, end_date, db_path, whitelist_indices, only_whitelist=False):
+    """
+    Identifies faults that turn ON and OFF without a Manual Mode intervention.
+    Designed for high-performance 'Chatter' detection.
+    """
+    con = get_db_con(db_path)
+    if not con:
+        return pd.DataFrame(), pd.DataFrame()
+
+    try:
+        # 1. Get Manual Mode (57011) Windows
+        # We assume if 57011 is ON, maintenance is happening.
+        manual_query = """
+            SELECT (alarm_date || ' ' || alarm_time)::TIMESTAMP as ts, UPPER(alarm_state) as state
+            FROM alarm_logs
+            WHERE unit_id ILIKE ? AND alarm_index = 57011
+            AND (alarm_date || ' ' || alarm_time)::TIMESTAMP BETWEEN ? AND ?
+            ORDER BY ts
+        """
+        start_ts_str = f"{start_date} 00:00:00"
+        end_ts_str = f"{end_date} 23:59:59"
+
+        manual_df = con.execute(
+            manual_query, [crane_id, start_ts_str, end_ts_str]).df()
+
+        # Build Manual Intervals List [(start, end), ...]
+        manual_intervals = []
+        current_start = None
+        for row in manual_df.itertuples():
+            if 'ON' in row.state and current_start is None:
+                current_start = row.ts
+            elif 'OFF' in row.state and current_start is not None:
+                manual_intervals.append((current_start, row.ts))
+                current_start = None
+
+        # 2. Get All Fault ON/OFF Events efficiently using Window Functions
+        # We pair every ON with its subsequent event to determine duration.
+        # If the subsequent event is OFF, we have a duration. If ON (double trigger), duration is 0.
+        wl_clause = ""
+        if only_whitelist and whitelist_indices:
+            wl_ids = ", ".join(map(str, whitelist_indices))
+            wl_clause = f"AND alarm_index IN ({wl_ids})"
+        elif only_whitelist and not whitelist_indices:
+            return pd.DataFrame(), pd.DataFrame()  # Whitelist requested but empty
+
+        fault_query = f"""
+            WITH raw_events AS (
+                SELECT 
+                    alarm_index, description, alarm_class, alarm_state,
+                    (alarm_date || ' ' || alarm_time)::TIMESTAMP as ts
+                FROM alarm_logs
+                WHERE unit_id ILIKE ? AND alarm_index != 57011
+                AND (alarm_date || ' ' || alarm_time)::TIMESTAMP BETWEEN ? AND ?
+                {wl_clause}
+            ),
+            paired_events AS (
+                SELECT
+                    alarm_index, description, alarm_class, ts as start_ts, UPPER(alarm_state) as state,
+                    LEAD(ts) OVER (PARTITION BY alarm_index ORDER BY ts) as end_ts,
+                    LEAD(UPPER(alarm_state)) OVER (PARTITION BY alarm_index ORDER BY ts) as next_state
+                FROM raw_events
+            )
+            SELECT * FROM paired_events WHERE state LIKE '%ON%'
+        """
+
+        faults_df = con.execute(
+            fault_query, [crane_id, start_ts_str, end_ts_str]).df()
+        con.close()
+
+        if faults_df.empty:
+            return pd.DataFrame(), pd.DataFrame()
+
+        # 3. Filter out faults that occurred during Manual Mode
+        # Optimized Python filtering using bisect is faster than complex SQL join on inequalities
+
+        # Ensure manual intervals are sorted (they should be)
+        # We need a list of start times and end times for bisect
+        man_starts = [x[0] for x in manual_intervals]
+        man_ends = [x[1] for x in manual_intervals]
+
+        transient_faults = []
+
+        # Iterate and Filter
+        for row in faults_df.itertuples():
+            f_start = row.start_ts
+            f_end = row.end_ts  # We need to ensure end_ts is not None/NaT if we rely on it
+
+            # bisect_right returns the insertion point i such that all e in a[:i] have e <= x
+            # We want to find manual intervals that might overlap.
+            # An overlap occurs if (StartA <= EndB) and (EndA >= StartB)
+            # Here A is Fault, B is Manual.
+            # So: (f_start < m_end) AND (f_end > m_start)
+
+            idx = bisect.bisect_right(man_starts, f_start) - 1
+
+            is_manual = False
+
+            # Check the interval that started before or exactly at f_start
+            if idx >= 0:
+                # If the manual session ends after the fault starts, we have an overlap
+                if f_start < man_ends[idx]:
+                    is_manual = True
+
+            # Check the NEXT interval (which starts after f_start)
+            # The fault might have started before this manual session, but ends inside it.
+            if not is_manual and (idx + 1) < len(man_starts):
+                # If the fault ends after the next manual session starts, we have an overlap
+                # Note: f_end is "row.end_ts". If the fault is still active (no end_ts), we assume no future overlap for now.
+                if row.end_ts and row.end_ts > man_starts[idx + 1]:
+                    is_manual = True
+
+            if not is_manual:
+                # Calculate Duration
+                duration_sec = 0.0
+                if row.next_state and 'OFF' in row.next_state and row.end_ts:
+                    duration_sec = (row.end_ts - f_start).total_seconds()
+                    # Handle negative duration if DB is weird, or huge duration
+                    if duration_sec < 0:
+                        duration_sec = 0
+
+                transient_faults.append({
+                    'alarm_index': row.alarm_index,
+                    'description': row.description,
+                    'start_ts': f_start,
+                    'duration_sec': duration_sec,
+                    'is_whitelisted': 'True' if int(row.alarm_index) in whitelist_indices else 'False'
+                })
+
+        if not transient_faults:
+            return pd.DataFrame(), pd.DataFrame()
+
+        df_trans = pd.DataFrame(transient_faults)
+
+        # 4. Aggregation for Summary Table
+        # We need: Frequency, Avg Duration, Total Duration, Peak Activity Window
+
+        summary_rows = []
+        for (idx, desc), grp in df_trans.groupby(['alarm_index', 'description']):
+            freq = len(grp)
+            total_dur = grp['duration_sec'].sum()
+            avg_dur = total_dur / freq if freq > 0 else 0
+
+            # Peak Activity Window (Hourly)
+            grp_time = grp.set_index('start_ts')
+            if not grp_time.empty:
+                hourly_counts = grp_time.resample('h').size()
+                if not hourly_counts.empty:
+                    peak_hour_ts = hourly_counts.idxmax()
+                    peak_count = hourly_counts.max()
+                    peak_str = f"{peak_hour_ts.strftime('%Y-%m-%d %H:00')} ({peak_count} events)"
+                else:
+                    peak_str = "N/A"
+            else:
+                peak_str = "N/A"
+
+            summary_rows.append({
+                'alarm_index': idx,
+                'description': desc,
+                'frequency': freq,
+                'avg_duration_sec': round(avg_dur, 3),  # Precision for chatter
+                'total_duration_sec': round(total_dur, 2),
+                'peak_activity': peak_str,
+                'is_whitelisted': grp['is_whitelisted'].iloc[0]
+            })
+
+        summary_df = pd.DataFrame(summary_rows).sort_values(
+            'frequency', ascending=False)
+        return summary_df, df_trans
+
+    except Exception as e:
+        print(f"[DEBUG] Transient Analysis Error: {e}")
+        if con:
+            con.close()
+        return pd.DataFrame(), pd.DataFrame()
 
 
 def get_explorer_logs(crane_id, start_date, end_date, index_filter, desc_filter, db_path, whitelist_indices, only_whitelist=False):
@@ -353,13 +511,12 @@ def get_explorer_logs(crane_id, start_date, end_date, index_filter, desc_filter,
     """
     params = [crane_id]
 
-    if only_whitelist:
-        if whitelist_indices:
-            wl_str = ", ".join(map(str, whitelist_indices))
-            query += f" AND alarm_index IN ({wl_str})"
-        else:
-            con.close()
-            return pd.DataFrame()
+    if only_whitelist and whitelist_indices:
+        wl_str = ", ".join(map(str, whitelist_indices))
+        query += f" AND alarm_index IN ({wl_str})"
+    elif only_whitelist:
+        con.close()
+        return pd.DataFrame()
 
     if index_filter:
         query += " AND CAST(alarm_index AS VARCHAR) LIKE ?"
@@ -397,9 +554,10 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
     dcc.Store(id='session-store'),
     dcc.Store(id='details-store'),
     dcc.Store(id='moves-store'),
+    dcc.Store(id='transient-raw-store'),  # Store raw timeseries for graphing
     dcc.Store(id='current-db-path', data=DEFAULT_DB_PATH),
     dcc.Store(id='whitelist-data-store', data=load_default_whitelist()),
-    dcc.Store(id='target-session-store'),  # Stores ID for jump navigation
+    dcc.Store(id='target-session-store'),
 
     # Header
     html.Div(style={'backgroundColor': '#1e293b', 'padding': '20px', 'color': 'white', 'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center'}, children=[
@@ -415,7 +573,7 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
                            'fontSize': '10px', 'color': '#94a3b8', 'fontWeight': 'bold', 'marginBottom': '4px'}),
                 html.Div(style={'display': 'flex'}, children=[
                     dcc.Upload(id='upload-db', children=html.Div(
-                        ["📂 Select DB File"]), style=upload_btn_style, multiple=False),
+                        ["📁 Select DB File"]), style=upload_btn_style, multiple=False),
                     dcc.Upload(id='upload-whitelist', children=html.Div(
                         ["📋 Select Whitelist"]), style=upload_btn_style, multiple=False)
                 ]),
@@ -425,14 +583,10 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
             html.Div([
                 html.Label("Analysis Period:", style={
                            'fontSize': '12px', 'color': '#94a3b8', 'display': 'block'}),
-                # FIXED: Added container style to prevent squash
                 html.Div(style={'backgroundColor': 'white', 'borderRadius': '4px', 'overflow': 'hidden'}, children=[
                     dcc.DatePickerRange(
-                        id='date-picker',
-                        style={'fontSize': '12px', 'border': 'none'},
-                        start_date_placeholder_text="Start",
-                        end_date_placeholder_text="End",
-                        clearable=False
+                        id='date-picker', style={'fontSize': '12px', 'border': 'none'},
+                        start_date_placeholder_text="Start", end_date_placeholder_text="End", clearable=False
                     )
                 ])
             ]),
@@ -444,6 +598,7 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
     ]),
 
     dcc.Tabs(id="tabs-main", value='tab-audit', children=[
+        # TAB 1: FORENSIC AUDIT
         dcc.Tab(label='Forensic Audit', value='tab-audit', children=[
             dcc.Loading(id="loading-audit", type="default", color="#1e293b", children=html.Div(style={'minHeight': '600px'}, children=[
                 html.Div(style={'display': 'flex', 'gap': '15px', 'padding': '20px', 'alignItems': 'flex-end'}, children=[
@@ -474,12 +629,8 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
                              html.Div([
                                  html.Label("Filter:", style={
                                             'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '12px'}),
-                                 dcc.RadioItems(
-                                     id='detail-view-mode',
-                                     options=[{'label': ' All Faults', 'value': 'ALL'}, {
-                                         'label': ' Whitelist Only', 'value': 'WL'}],
-                                     value='ALL', inline=True, style={'display': 'inline-block', 'fontSize': '12px'}
-                                 )
+                                 dcc.RadioItems(id='detail-view-mode', options=[{'label': ' All Faults', 'value': 'ALL'}, {
+                                                'label': ' Whitelist Only', 'value': 'WL'}], value='ALL', inline=True, style={'display': 'inline-block', 'fontSize': '12px'})
                              ], style={'display': 'inline-block', 'verticalAlign': 'middle'})
                              ], style={'marginBottom': '10px'}),
                         dash_table.DataTable(id='detail-table', sort_action="native", filter_action="native", editable=True, page_size=10, style_header={'backgroundColor': '#dc2626', 'color': 'white', 'fontWeight': 'bold'}, style_cell={
@@ -488,6 +639,69 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
                 ])
             ]))
         ]),
+
+        # TAB 2: TRANSIENT ANALYSIS
+        dcc.Tab(label='Transient Analysis (Predictive)', value='tab-transient', children=[
+            dcc.Loading(id="loading-transient", type="default", color="#1e293b", children=html.Div(style={'padding': '20px', 'minHeight': '800px'}, children=[
+                html.Div(style={'backgroundColor': 'white', 'padding': '20px', 'borderRadius': '8px', 'boxShadow': '0 1px 3px rgba(0,0,0,0.1)', 'marginBottom': '20px'}, children=[
+                    html.H2("Ghost Fault & Chatter Detector", style={
+                            'color': '#1e293b', 'marginTop': 0}),
+                    html.P("Detects alarms that self-clear (turn ON then OFF) without entering Manual Mode. High frequency counts indicate degrading components.",
+                           style={'color': '#64748b', 'fontSize': '14px'}),
+                    html.Div(style={'marginTop': '15px'}, children=[
+                        html.Label("Scope:", style={
+                                   'fontWeight': 'bold', 'marginRight': '10px'}),
+                        dcc.RadioItems(
+                            id='transient-scope-toggle',
+                            options=[{'label': ' All Faults', 'value': 'ALL'}, {
+                                'label': ' Whitelist Only (Recommended)', 'value': 'WL'}],
+                            value='WL', inline=True
+                        )
+                    ])
+                ]),
+                html.Div(style={'display': 'flex', 'gap': '20px'}, children=[
+                    html.Div(style={'flex': 1}, children=[
+                        html.H3("Fault Frequency Table", style={
+                                'fontSize': '16px', 'fontWeight': 'bold', 'marginBottom': '10px'}),
+                        dash_table.DataTable(
+                            id='transient-table',
+                            sort_action="native",
+                            filter_action="native",
+                            row_selectable="single",
+                            page_size=15,
+                            style_header={'backgroundColor': '#f59e0b',
+                                          'color': 'white', 'fontWeight': 'bold'},
+                            style_cell={'textAlign': 'left',
+                                        'fontSize': '11px', 'padding': '8px'},
+                            style_data_conditional=[
+                                {'if': {'column_id': 'avg_duration_sec', 'filter_query': '{avg_duration_sec} < 1'},
+                                    'color': '#d97706', 'fontWeight': 'bold'},  # Highlight fast chatter
+                            ],
+                            columns=[
+                                {"name": "Index", "id": "alarm_index"},
+                                {"name": "Description", "id": "description"},
+                                {"name": "Frequency (Count)",
+                                 "id": "frequency"},
+                                {"name": "Avg Dur (s)",
+                                 "id": "avg_duration_sec"},
+                                {"name": "Peak Activity Window",
+                                    "id": "peak_activity"}
+                            ]
+                        )
+                    ]),
+                    html.Div(style={'flex': 1, 'backgroundColor': 'white', 'padding': '15px', 'borderRadius': '8px'}, children=[
+                        html.H3("Drill-Down: Frequency Trend", style={
+                                'fontSize': '16px', 'fontWeight': 'bold', 'marginBottom': '10px'}),
+                        html.P(id='transient-graph-title', children="Select a row in the table to view trend.",
+                               style={'fontSize': '12px', 'color': '#94a3b8'}),
+                        dcc.Graph(id='transient-trend-graph',
+                                  style={'height': '400px'})
+                    ])
+                ])
+            ]))
+        ]),
+
+        # TAB 3: DATA EXPLORER
         dcc.Tab(label='Data Explorer', value='tab-explorer', children=[
             dcc.Loading(id="loading-explorer", type="default", color="#1e293b", children=html.Div(style={'padding': '20px'}, children=[
                 html.Div(style={'backgroundColor': 'white', 'padding': '20px', 'borderRadius': '8px', 'boxShadow': '0 1px 3px rgba(0,0,0,0.1)', 'marginBottom': '20px', 'display': 'flex', 'gap': '20px', 'alignItems': 'center', 'flexWrap': 'wrap'}, children=[
@@ -595,14 +809,10 @@ def update_crane_and_moves(crane_id, start_date, end_date, n_clicks, db_path, wh
 def update_table_data(data):
     cols = [{"name": i, "id": j} for i, j in [("ID", "session_id"), ("Start", "start_timestamp"), ("End", "end_timestamp"), (
         "Duration (min)", "session_duration_mins"), ("Index", "primary_index"), ("Primary Root Cause", "primary_issue"), ("MMBF?", "mmbf_tag")]]
-
-    # Add Link Column
     cols.append({"name": "Logs", "id": "view_logs"})
-
     if data:
         for row in data:
-            row['view_logs'] = "🔍 View"
-
+            row['view_logs'] = "🔎 View"
     return cols, data or []
 
 
@@ -617,16 +827,8 @@ def update_details(selected, view_mode, session_data, details):
     rows = details.get(sid, [])
     if view_mode == 'WL':
         rows = [r for r in rows if r.get('is_whitelisted') == 'True']
-    cols = [
-        {"name": "Start Time", "id": "first_occurrence"},
-        {"name": "End Time", "id": "resolution_time"},
-        {"name": "Idx", "id": "alarm_index"},
-        {"name": "Class", "id": "alarm_class"},
-        {"name": "Fault", "id": "description"},
-        {"name": "Duration (min)", "id": "total_duration_mins"},
-        {"name": "MMBF?", "id": "mmbf_tick",
-            "presentation": "dropdown", "editable": True}
-    ]
+    cols = [{"name": "Start Time", "id": "first_occurrence"}, {"name": "End Time", "id": "resolution_time"}, {"name": "Idx", "id": "alarm_index"}, {"name": "Class", "id": "alarm_class"}, {
+        "name": "Fault", "id": "description"}, {"name": "Duration (min)", "id": "total_duration_mins"}, {"name": "MMBF?", "id": "mmbf_tick", "presentation": "dropdown", "editable": True}]
     return cols, rows
 
 
@@ -660,6 +862,76 @@ def sync_and_save_mmbf(ts, detail_data, selected_rows, current_table, session_st
     mmbf_val = f"{(mmbf_count / (total_moves / 1000)):.2f}" if total_moves > 0 else "0.00"
     return session_store, mmbf_val, str(mmbf_count)
 
+# --- TRANSIENT ANALYSIS CALLBACKS ---
+
+
+@app.callback(
+    [Output('transient-table', 'data'), Output('transient-raw-store', 'data')],
+    [Input('tabs-main', 'value'), Input('transient-scope-toggle', 'value'), Input('crane-selector',
+                                                                                  'value'), Input('date-picker', 'start_date'), Input('date-picker', 'end_date')],
+    [State('current-db-path', 'data'), State('whitelist-data-store', 'data')]
+)
+def update_transient_tab_data(tab, scope, crane_id, start, end, db_path, whitelist_data):
+    if tab != 'tab-transient':
+        return dash.no_update, dash.no_update
+
+    whitelist_indices = {int(x['alarm_index'])
+                         for x in whitelist_data} if whitelist_data else set()
+    only_whitelist = (scope == 'WL')
+
+    summary_df, raw_df = get_transient_faults(
+        crane_id, start, end, db_path, whitelist_indices, only_whitelist)
+
+    # Store raw data for graphing, but serialize timestamps to strings for JSON
+    raw_records = []
+    if not raw_df.empty:
+        df_store = raw_df.copy()
+        df_store['start_ts'] = df_store['start_ts'].astype(str)
+        raw_records = df_store.to_dict('records')
+
+    return summary_df.to_dict('records') if not summary_df.empty else [], raw_records
+
+
+@app.callback(
+    [Output('transient-trend-graph', 'figure'),
+     Output('transient-graph-title', 'children')],
+    [Input('transient-table', 'selected_rows')],
+    [State('transient-table', 'data'), State('transient-raw-store', 'data')]
+)
+def update_transient_graph(selected_rows, table_data, raw_data):
+    if not selected_rows or not table_data or not raw_data:
+        return {}, "Select a row in the table to view trend."
+
+    row = table_data[selected_rows[0]]
+    idx = row['alarm_index']
+    desc = row['description']
+
+    # Filter raw data for this specific alarm
+    df_raw = pd.DataFrame(raw_data)
+    df_raw = df_raw[df_raw['alarm_index'] == idx].copy()
+
+    if df_raw.empty:
+        return {}, f"No detail data for {desc}"
+
+    df_raw['start_ts'] = pd.to_datetime(df_raw['start_ts'])
+    df_raw.set_index('start_ts', inplace=True)
+
+    # Resample to get counts per hour (or Day depending on range)
+    # Default to Hourly for precision in identifying 'Storms'
+    df_resampled = df_raw.resample('h').size().reset_index(name='count')
+
+    fig = px.bar(
+        df_resampled, x='start_ts', y='count',
+        title=f"Chatter Frequency: {desc} ({idx})",
+        labels={'start_ts': 'Time', 'count': 'Fault Count (per Hour)'}
+    )
+    fig.update_layout(bargap=0.1, margin=dict(l=40, r=40, t=40, b=40))
+    fig.update_traces(marker_color='#f59e0b')
+
+    return fig, f"Trend Analysis for: {desc}"
+
+# --- EXPLORER & REPORT CALLBACKS ---
+
 
 @app.callback(
     [Output('explorer-table', 'columns'), Output('explorer-table', 'data'),
@@ -669,28 +941,24 @@ def sync_and_save_mmbf(ts, detail_data, selected_rows, current_table, session_st
                                              'start_date'), Input('date-picker', 'end_date'),
      Input('current-db-path', 'data'), Input('whitelist-data-store', 'data'),
      Input('session-store', 'data'), Input('details-store', 'data')],
-    [State('explorer-index-input', 'value'), State('explorer-desc-input', 'value'),
-     State('explorer-view-mode', 'value')]
+    [State('explorer-index-input', 'value'), State('explorer-desc-input',
+                                                   'value'), State('explorer-view-mode', 'value')]
 )
 def update_explorer_tab(tab, n, target_sid, crane_id, start, end, db_path, whitelist_data, session_data, details_data, idx_filter, desc_filter, view_mode):
-    # Only update if the tab is visible OR if we just targeted a session (which implies tab switch imminent)
     if tab != 'tab-explorer':
         return [], [], [], 0
 
     whitelist_indices = {int(x['alarm_index'])
                          for x in whitelist_data} if whitelist_data else set()
     only_whitelist = (view_mode == 'WL')
-
-    # 1. Fetch Raw Logs
     df_logs = get_explorer_logs(crane_id, start, end, idx_filter, desc_filter,
                                 db_path, whitelist_indices, only_whitelist=only_whitelist)
     if df_logs.empty:
         return [], [], [], 0
 
-    # 2. Build Highlighting Map & Tag Session Context
     PALETTE = ['#dbeafe', '#dcfce7', '#f3e8ff',
                '#ffedd5', '#fce7f3', '#cffafe']
-    df_logs['session_context'] = ''  # Initialize Column
+    df_logs['session_context'] = ''
     df_logs['matched_session_id'] = None
 
     if session_data:
@@ -700,70 +968,40 @@ def update_explorer_tab(tab, n, target_sid, crane_id, start, end, db_path, white
             s_start = pd.Timestamp(session['start_timestamp'])
             s_end = pd.Timestamp(session['end_timestamp'])
 
-            # A) Tag Manual Mode 57011
-            mask_manual = (df_logs['alarm_index'] == MANUAL_MODE_INDEX) & \
-                          (df_logs['full_ts'] >= s_start) & \
-                          (df_logs['full_ts'] <= s_end)
-
+            mask_manual = (df_logs['alarm_index'] == MANUAL_MODE_INDEX) & (
+                df_logs['full_ts'] >= s_start) & (df_logs['full_ts'] <= s_end)
             df_logs.loc[mask_manual, 'matched_session_id'] = sid
             df_logs.loc[mask_manual, 'row_color'] = color
             df_logs.loc[mask_manual, 'session_context'] = f"Session {sid}"
 
-            # B) Tag Linked Faults
             faults = details_data.get(sid, []) if details_data else []
             for f in faults:
                 f_idx = int(f['alarm_index'])
                 f_start_ts = pd.Timestamp(f['first_occurrence'])
                 f_end_ts = pd.Timestamp(f['resolution_time'])
 
-                # Tag Start
-                mask_fault_start = (df_logs['alarm_index'] == f_idx) & (
-                    df_logs['full_ts'] == f_start_ts)
-                df_logs.loc[mask_fault_start, 'row_color'] = color
-                df_logs.loc[mask_fault_start,
-                            'session_context'] = f"Session {sid}"
+                mask_fault = (df_logs['alarm_index'] == f_idx) & (
+                    (df_logs['full_ts'] == f_start_ts) | (df_logs['full_ts'] == f_end_ts))
+                df_logs.loc[mask_fault, 'row_color'] = color
+                df_logs.loc[mask_fault, 'session_context'] = f"Session {sid}"
 
-                # Tag End
-                mask_fault_end = (df_logs['alarm_index'] == f_idx) & (
-                    df_logs['full_ts'] == f_end_ts)
-                df_logs.loc[mask_fault_end, 'row_color'] = color
-                df_logs.loc[mask_fault_end,
-                            'session_context'] = f"Session {sid}"
-
-    # 3. Calculate Styles
     styles = []
     if 'row_color' in df_logs.columns:
         unique_colors = df_logs['row_color'].dropna().unique()
         for c in unique_colors:
-            styles.append({
-                'if': {'filter_query': f'{{row_color}} eq "{c}"'},
-                'backgroundColor': c,
-                'color': 'black'
-            })
+            styles.append({'if': {'filter_query': f'{{row_color}} eq "{c}"'},
+                          'backgroundColor': c, 'color': 'black'})
 
-    # 4. Define Columns (Ensure session_context is included)
-    cols = [{"name": i.replace('_', ' ').title(), "id": i} for i in df_logs.columns
-            if i not in ['is_whitelisted', 'full_ts', 'matched_session_id', 'row_color']]
+    cols = [{"name": i.replace('_', ' ').title(), "id": i} for i in df_logs.columns if i not in [
+        'is_whitelisted', 'full_ts', 'matched_session_id', 'row_color']]
 
-    # 5. Jump to Page Logic
     page_current = 0
     if target_sid:
-        # Find the first row that matches this session ID
-        # Since logs are sorted DESC by default, we just find the first occurrence
-        # or we might want the *start* of the session? In desc order, start is later in index?
-        # Actually, let's just find any row belonging to the session to bring it into view.
-
-        # We look for rows where 'session_context' contains 'Session {target_sid}'
         target_str = f"Session {target_sid}"
-
-        # Get integer locations (indices) of matching rows
         matches = df_logs.index[df_logs['session_context']
                                 == target_str].tolist()
-
         if matches:
-            first_match_index = matches[0]  # Index in the current dataframe
-            # Calculate page number
-            page_current = math.floor(first_match_index / PAGE_SIZE)
+            page_current = math.floor(matches[0] / PAGE_SIZE)
 
     return cols, df_logs.to_dict('records'), styles, page_current
 
@@ -853,10 +1091,10 @@ def generate_pdf_report(n, session_data, details_data, crane_id, total_moves, st
                     pdf.set_fill_color(*HIGHLIGHT_COLOR)
                 if pdf.get_y() > 275:
                     pdf.add_page()
-                start_val = str(f.get('first_occurrence', ''))
-                res_val = str(f.get('resolution_time', ''))
-                pdf.cell(35, 6, start_val, 1, 0, 'C', fill)
-                pdf.cell(35, 6, res_val, 1, 0, 'C', fill)
+                pdf.cell(35, 6, str(f.get('first_occurrence', '')),
+                         1, 0, 'C', fill)
+                pdf.cell(35, 6, str(f.get('resolution_time', '')),
+                         1, 0, 'C', fill)
                 pdf.cell(12, 6, str(f['alarm_index']), 1, 0, 'C', fill)
                 pdf.cell(12, 6, str(f['alarm_class']), 1, 0, 'C', fill)
                 pdf.cell(70, 6, sanitize_str(
@@ -871,6 +1109,22 @@ def generate_pdf_report(n, session_data, details_data, crane_id, total_moves, st
     return dcc.send_bytes(pdf.output(dest='S').encode('latin-1'), f"{crane_id}_MMBF_Report.pdf")
 
 
+@app.callback([Output('tabs-main', 'value'), Output('target-session-store', 'data')],
+              [Input('session-table', 'active_cell')],
+              [State('session-table', 'derived_virtual_data')], prevent_initial_call=True)
+def jump_to_session_log(active_cell, rows):
+    if not active_cell or not rows:
+        return dash.no_update, dash.no_update
+    if active_cell['column_id'] == 'view_logs':
+        try:
+            row_idx = active_cell['row']
+            if row_idx < len(rows):
+                return 'tab-explorer', rows[row_idx].get('session_id')
+        except:
+            pass
+    return dash.no_update, dash.no_update
+
+
 @app.callback(Output('main-trend-graph', 'figure'), [Input('session-store', 'data')])
 def update_graph(data):
     if not data:
@@ -881,33 +1135,6 @@ def update_graph(data):
     fig.update_layout(margin=dict(l=20, r=20, t=40, b=20), paper_bgcolor='rgba(0,0,0,0)',
                       plot_bgcolor='rgba(0,0,0,0)', xaxis=dict(type='category'))
     return fig
-
-# UPDATED: Jump Logic (No Filter, Just Page Navigation)
-
-
-@app.callback(
-    [Output('tabs-main', 'value'), Output('target-session-store', 'data')],
-    [Input('session-table', 'active_cell')],
-    [State('session-table', 'derived_virtual_data')],
-    prevent_initial_call=True
-)
-def jump_to_session_log(active_cell, rows):
-    if not active_cell or not rows:
-        return dash.no_update, dash.no_update
-
-    if active_cell['column_id'] == 'view_logs':
-        try:
-            row_idx = active_cell['row']
-            if row_idx < len(rows):
-                sid = rows[row_idx].get('session_id')
-                # We return 'tab-explorer' to switch tabs
-                # We set 'target-session-store' to the Session ID we want to jump to
-                return 'tab-explorer', sid
-        except Exception as e:
-            print(f"Jump Error: {e}")
-            pass
-
-    return dash.no_update, dash.no_update
 
 
 if __name__ == '__main__':
