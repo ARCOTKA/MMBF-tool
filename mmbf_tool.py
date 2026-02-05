@@ -30,6 +30,18 @@ TWISTLOCK_LOCKED_INDEX = 5740
 TWISTLOCK_UNLOCKED_INDEX = 5741
 PAGE_SIZE = 20
 
+# --- STYLING CONSTANTS ---
+# Fix for jumping tables: enforce width constraints and wrapping
+FIXED_TABLE_STYLE = {
+    'textAlign': 'left',
+    'fontSize': '11px',
+    'padding': '8px',
+    'whiteSpace': 'normal',
+    'height': 'auto',
+    'verticalAlign': 'top'
+    # Widths are now handled via style_cell_conditional per table
+}
+
 # --- HELPER FUNCTIONS ---
 
 
@@ -256,8 +268,6 @@ def get_maintenance_sessions(crane_id, start_date, end_date, db_path, whitelist_
                             'mmbf_tick': False,
                             'is_whitelisted': 'True' if int(idx) in whitelist_indices else 'False'
                         })
-
-            # REMOVED: Lookback Strategy block has been removed as requested.
 
             w_start_str = w_start.strftime('%Y-%m-%d %H:%M:%S')
             saved = meta_df[meta_df['session_start'] ==
@@ -596,7 +606,19 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
                     id='main-trend-graph', style={'height': '200px'})]),
                 html.Div(style={'padding': '20px', 'display': 'flex', 'flexDirection': 'column', 'gap': '25px'}, children=[
                     html.Div([html.H3("1. Executive Summary of Maintenance Sessions", style={'color': '#1e293b', 'marginBottom': '10px'}),
-                              dash_table.DataTable(id='session-table', sort_action="native", filter_action="native", row_selectable="single", page_size=10, style_header={'backgroundColor': '#dc2626', 'color': 'white', 'fontWeight': 'bold'}, style_cell={'textAlign': 'left', 'fontSize': '11px', 'padding': '10px'}, style_data_conditional=[{'if': {'column_id': 'mmbf_tag', 'filter_query': '{mmbf_tag} eq "Yes"'}, 'backgroundColor': '#fee2e2', 'color': '#b91c1c', 'fontWeight': 'bold'}])]),
+                              dash_table.DataTable(id='session-table', sort_action="native", filter_action="native", row_selectable="single", page_size=10, style_header={'backgroundColor': '#dc2626', 'color': 'white', 'fontWeight': 'bold'},
+                              style_table={'height': '400px',
+                                           'overflowY': 'auto'},
+                              style_cell=FIXED_TABLE_STYLE,
+                              style_cell_conditional=[
+                                  {'if': {'column_id': 'primary_issue'},
+                                      'width': '350px'},
+                                  {'if': {'column_id': 'session_id'},
+                                      'width': '80px'},
+                                  {'if': {'column_id': 'session_duration_mins'},
+                                      'width': '120px'}
+                              ],
+                              style_data_conditional=[{'if': {'column_id': 'mmbf_tag', 'filter_query': '{mmbf_tag} eq "Yes"'}, 'backgroundColor': '#fee2e2', 'color': '#b91c1c', 'fontWeight': 'bold'}])]),
                     html.Div([
                         html.Div([
                              html.H3("2. Internal Fault Analysis (Session Focused)", style={
@@ -608,8 +630,17 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
                                                 'label': ' Whitelist Only', 'value': 'WL'}], value='ALL', inline=True, style={'display': 'inline-block', 'fontSize': '12px'})
                              ], style={'display': 'inline-block', 'verticalAlign': 'middle'})
                              ], style={'marginBottom': '10px'}),
-                        dash_table.DataTable(id='detail-table', sort_action="native", filter_action="native", editable=True, page_size=10, style_header={'backgroundColor': '#dc2626', 'color': 'white', 'fontWeight': 'bold'}, style_cell={
-                                             'textAlign': 'left', 'fontSize': '11px', 'padding': '10px'}, dropdown={'mmbf_tick': {'options': [{'label': 'YES', 'value': True}, {'label': 'NO', 'value': False}]}})
+                        dash_table.DataTable(id='detail-table', sort_action="native", filter_action="native", editable=True, page_size=10, style_header={'backgroundColor': '#dc2626', 'color': 'white', 'fontWeight': 'bold'},
+                                             style_table={
+                                                 'height': '500px', 'overflowY': 'auto'},
+                                             style_cell=FIXED_TABLE_STYLE,
+                                             style_cell_conditional=[
+                            {'if': {'column_id': 'description'}, 'width': '400px'},
+                            {'if': {'column_id': 'alarm_index'}, 'width': '80px'},
+                            {'if': {'column_id': 'total_duration_mins'},
+                                'width': '100px'}
+                        ],
+                            dropdown={'mmbf_tick': {'options': [{'label': 'YES', 'value': True}, {'label': 'NO', 'value': False}]}})
                     ])
                 ])
             ]))
@@ -647,8 +678,13 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
                                 page_size=10,
                                 style_header={
                                     'backgroundColor': '#f59e0b', 'color': 'white', 'fontWeight': 'bold'},
-                                style_cell={'textAlign': 'left', 'fontSize': '11px',
-                                            'padding': '8px', 'whiteSpace': 'normal', 'height': 'auto'},
+                                style_table={'height': '350px',
+                                             'overflowY': 'auto'},
+                                style_cell=FIXED_TABLE_STYLE,
+                                style_cell_conditional=[
+                                    {'if': {'column_id': 'description'},
+                                        'width': '250px'}
+                                ],
                                 style_data_conditional=[
                                     {
                                         'if': {'filter_query': '{is_whitelisted} eq "True"'},
@@ -689,8 +725,13 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
                                 page_size=10,
                                 style_header={
                                     'backgroundColor': '#ef4444', 'color': 'white', 'fontWeight': 'bold'},
-                                style_cell={'textAlign': 'left', 'fontSize': '11px',
-                                            'padding': '8px', 'whiteSpace': 'normal', 'height': 'auto'},
+                                style_table={'height': '350px',
+                                             'overflowY': 'auto'},
+                                style_cell=FIXED_TABLE_STYLE,
+                                style_cell_conditional=[
+                                    {'if': {'column_id': 'description'},
+                                        'width': '250px'}
+                                ],
                                 style_data_conditional=[
                                     {
                                         'if': {'filter_query': '{is_whitelisted} eq "True"'},
@@ -739,8 +780,12 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
                             page_size=15,
                             style_header={'backgroundColor': '#f59e0b',
                                           'color': 'white', 'fontWeight': 'bold'},
-                            style_cell={'textAlign': 'left',
-                                        'fontSize': '11px', 'padding': '8px'},
+                            style_table={'height': '600px',
+                                         'overflowY': 'auto'},
+                            style_cell=FIXED_TABLE_STYLE,
+                            style_cell_conditional=[
+                                {'if': {'column_id': 'description'}, 'width': '300px'}
+                            ],
                             style_data_conditional=[
                                 {'if': {'column_id': 'avg_duration_sec', 'filter_query': '{avg_duration_sec} < 1'},
                                     'color': '#d97706', 'fontWeight': 'bold'},  # Highlight fast chatter
@@ -789,7 +834,14 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
                 html.Div([
                     html.H3("Raw Alarm Logs (Session Context Highlighted)"),
                     dash_table.DataTable(id='explorer-table', sort_action="native", filter_action="native", page_size=PAGE_SIZE, style_header={
-                                         'backgroundColor': '#dc2626', 'color': 'white', 'fontWeight': 'bold'}, style_cell={'textAlign': 'left', 'fontSize': '11px', 'padding': '8px'})
+                                         'backgroundColor': '#dc2626', 'color': 'white', 'fontWeight': 'bold'},
+                                         style_table={
+                                             'height': '600px', 'overflowY': 'auto'},
+                                         style_cell=FIXED_TABLE_STYLE,
+                                         style_cell_conditional=[
+                                             {'if': {'column_id': 'description'},
+                                                 'width': '350px'}
+                    ])
                 ])
             ]))
         ])
