@@ -7,7 +7,8 @@ import base64
 import math
 
 # Import Logic and UI Modules
-import mmbf_logic as logic
+# mmbf_logic now exposes the class and some helpers
+from mmbf_logic import ForensicAnalyzer, BASE_DIR, DEFAULT_MIN_DURATION, load_default_whitelist, parse_whitelist_content, generate_pdf_report_bytes, MANUAL_MODE_INDEX, PAGE_SIZE
 import mmbf_ui as ui
 
 # --- INITIALIZATION ---
@@ -16,11 +17,6 @@ server = app.server
 
 # Load Layout from UI Module
 app.layout = ui.get_layout()
-
-# Initialize Default Whitelist on Startup
-initial_whitelist = logic.load_default_whitelist()
-# Note: We can't write directly to dcc.Store here, it happens via initial callback or State
-# But we can pre-populate logic if needed. For now, the Store's default is handled in the callback/store logic.
 
 # --- CALLBACKS ---
 
@@ -38,17 +34,21 @@ def update_config(db_content, wl_content, db_name, wl_name, current_db_path, cur
 
     # Initialize whitelist if empty on first load
     if not current_wl_data:
-        current_wl_data = logic.load_default_whitelist()
+        current_wl_data = load_default_whitelist()
 
     if ctx.triggered and 'upload-db' in ctx.triggered[0]['prop_id'] and db_content:
         try:
             content_type, content_string = db_content.split(',')
             decoded = base64.b64decode(content_string)
-            temp_path = os.path.join(logic.BASE_DIR, f'temp_loaded_{db_name}')
+            temp_path = os.path.join(BASE_DIR, f'temp_loaded_{db_name}')
             with open(temp_path, 'wb') as f:
                 f.write(decoded)
             current_db_path = temp_path
-            logic.init_metadata_tables(current_db_path)
+
+            # Use class context to initialize tables
+            with ForensicAnalyzer(current_db_path, read_only=False) as analyzer:
+                analyzer.init_metadata_tables()
+
             status_msg = f"Database Switched: {db_name}"
         except Exception as e:
             status_msg = f"DB Load Error: {e}"
@@ -56,13 +56,16 @@ def update_config(db_content, wl_content, db_name, wl_name, current_db_path, cur
     if ctx.triggered and 'upload-whitelist' in ctx.triggered[0]['prop_id'] and wl_content:
         try:
             content_type, content_string = wl_content.split(',')
-            current_wl_data = logic.parse_whitelist_content(
+            current_wl_data = parse_whitelist_content(
                 content_type, content_string)
             status_msg = f"Whitelist Updated: {wl_name} ({len(current_wl_data)} items)"
         except Exception as e:
             status_msg = f"Whitelist Load Error: {e}"
 
-    min_date, max_date = logic.get_db_date_range(current_db_path)
+    # Use class context to get date range
+    with ForensicAnalyzer(current_db_path) as analyzer:
+        min_date, max_date = analyzer.get_db_date_range()
+
     return current_db_path, current_wl_data, status_msg, min_date, max_date, min_date, max_date
 
 
@@ -81,23 +84,22 @@ def update_crane_and_moves(crane_id, start_date, end_date, n_clicks, db_path, wh
         try:
             min_duration = float(min_duration)
         except ValueError:
-            min_duration = logic.DEFAULT_MIN_DURATION
+            min_duration = DEFAULT_MIN_DURATION
     else:
-        min_duration = logic.DEFAULT_MIN_DURATION
+        min_duration = DEFAULT_MIN_DURATION
 
-    if ctx.triggered and 'save-moves-btn' in ctx.triggered[0]['prop_id'] and manual_val is not None:
-        con = logic.get_db_con(db_path, read_only=False)
-        if con:
-            con.execute("INSERT OR REPLACE INTO manual_move_overrides (unit_id, manual_count) VALUES (?, ?)", [
-                        crane_id, manual_val])
-            con.close()
+    # Open Analyzer Context
+    with ForensicAnalyzer(db_path, read_only=False) as analyzer:
+        if ctx.triggered and 'save-moves-btn' in ctx.triggered[0]['prop_id'] and manual_val is not None:
+            analyzer.set_manual_override(crane_id, manual_val)
 
-    whitelist_indices = {int(x['alarm_index'])
-                         for x in whitelist_data} if whitelist_data else set()
-    moves = logic.get_refined_move_count(
-        crane_id, start_date, end_date, db_path)
-    df_s, details = logic.get_maintenance_sessions(
-        crane_id, start_date, end_date, db_path, whitelist_indices, min_duration)
+        whitelist_indices = {int(x['alarm_index'])
+                             for x in whitelist_data} if whitelist_data else set()
+
+        moves = analyzer.get_refined_move_count(crane_id, start_date, end_date)
+        df_s, details = analyzer.get_maintenance_sessions(
+            crane_id, start_date, end_date, whitelist_indices, min_duration)
+
     mmbf_count = len(df_s[df_s['mmbf_tag'] == 'Yes']) if not df_s.empty else 0
     mmbf_val = f"{(mmbf_count / (moves / 1000)):.2f}" if moves > 0 else "0.00"
 
@@ -143,15 +145,14 @@ def sync_and_save_mmbf(ts, detail_data, selected_rows, current_table, session_st
                         ), current_table[selected_rows[0]]['start_timestamp']
     ticked_fault = next(
         (f for f in detail_data if f.get('mmbf_tick') is True), None)
-    con = logic.get_db_con(db_path, read_only=False)
-    if con:
+
+    with ForensicAnalyzer(db_path, read_only=False) as analyzer:
         if ticked_fault:
-            con.execute("INSERT OR REPLACE INTO forensic_metadata (unit_id, session_start, is_mmbf, primary_index, primary_issue) VALUES (?, ?, ?, ?, ?)", [
-                        crane_id, start_ts, True, ticked_fault['alarm_index'], ticked_fault['description']])
+            analyzer.update_forensic_metadata(
+                crane_id, start_ts, True, ticked_fault['alarm_index'], ticked_fault['description'])
         else:
-            con.execute("DELETE FROM forensic_metadata WHERE unit_id ILIKE ? AND session_start = ?", [
-                        crane_id, start_ts])
-        con.close()
+            analyzer.update_forensic_metadata(crane_id, start_ts, False, 0, "")
+
     for row in session_store:
         if str(row['session_id']) == sid:
             row['mmbf_tag'] = 'Yes' if ticked_fault else 'No'
@@ -179,8 +180,9 @@ def update_insights_tab_data(tab, trans_scope, nuis_scope, crit_scope, crane_id,
     whitelist_indices = {int(x['alarm_index'])
                          for x in whitelist_data} if whitelist_data else set()
 
-    summary_df, raw_df = logic.get_transient_faults(
-        crane_id, start, end, db_path, whitelist_indices, only_whitelist=False)
+    with ForensicAnalyzer(db_path) as analyzer:
+        summary_df, raw_df = analyzer.get_transient_faults(
+            crane_id, start, end, whitelist_indices, only_whitelist=False)
 
     raw_records = []
     if not raw_df.empty:
@@ -294,8 +296,11 @@ def update_explorer_tab(tab, n, target_sid, crane_id, start, end, db_path, white
     whitelist_indices = {int(x['alarm_index'])
                          for x in whitelist_data} if whitelist_data else set()
     only_whitelist = (view_mode == 'WL')
-    df_logs = logic.get_explorer_logs(crane_id, start, end, idx_filter,
-                                      desc_filter, db_path, whitelist_indices, only_whitelist=only_whitelist)
+
+    with ForensicAnalyzer(db_path) as analyzer:
+        df_logs = analyzer.get_explorer_logs(crane_id, start, end, idx_filter,
+                                             desc_filter, whitelist_indices, only_whitelist=only_whitelist)
+
     if df_logs.empty:
         return [], [], [], 0
 
@@ -311,7 +316,7 @@ def update_explorer_tab(tab, n, target_sid, crane_id, start, end, db_path, white
             s_start = pd.Timestamp(session['start_timestamp'])
             s_end = pd.Timestamp(session['end_timestamp'])
 
-            mask_manual = (df_logs['alarm_index'] == logic.MANUAL_MODE_INDEX) & (
+            mask_manual = (df_logs['alarm_index'] == MANUAL_MODE_INDEX) & (
                 df_logs['full_ts'] >= s_start) & (df_logs['full_ts'] <= s_end)
             df_logs.loc[mask_manual, 'matched_session_id'] = sid
             df_logs.loc[mask_manual, 'row_color'] = color
@@ -342,7 +347,7 @@ def update_explorer_tab(tab, n, target_sid, crane_id, start, end, db_path, white
         matches = df_logs.index[df_logs['session_context']
                                 == target_str].tolist()
         if matches:
-            page_current = math.floor(matches[0] / logic.PAGE_SIZE)
+            page_current = math.floor(matches[0] / PAGE_SIZE)
 
     return cols, df_logs.to_dict('records'), styles, page_current
 
@@ -360,7 +365,7 @@ def generate_pdf_report(n, session_data, details_data, crane_id, total_moves, st
     if not session_data:
         return dash.no_update
     # Logic delegated to mmbf_logic to keep Main clean
-    pdf_bytes = logic.generate_pdf_report_bytes(
+    pdf_bytes = generate_pdf_report_bytes(
         session_data, details_data, crane_id, total_moves, start_date, end_date, mmbf_val)
     if pdf_bytes:
         return dcc.send_bytes(pdf_bytes, f"{crane_id}_MMBF_Report.pdf")

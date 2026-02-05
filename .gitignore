@@ -1,17 +1,22 @@
-# Ignore large data files
-*.csv
-*.duckdb
-*.xml
+# --- Data Files ---
+# Ignore large data files 
+*.csv 
+*.duckdb 
+*.xml 
 
-# EXCEPTION: Explicitly track the whitelist file
-!MMbf_whitelist.csv
+# Exception: Explicitly track the whitelist file 
+!MMbf_whitelist.csv 
 
-# --- NEW ADDITIONS ---
-# Ignore Python bytecode
-__pycache__/
+# --- Python & Environment ---
+# Ignore Python bytecode 
+__pycache__/ 
 
-# Ignore specific test file
-test.py
+# Ignore virtual environments
+venv/
 
-# Ignore the archive folder
+# --- Project Specifics ---
+# Ignore specific test file 
+test.py 
+
+# Ignore the archive folder 
 archive/
