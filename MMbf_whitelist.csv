@@ -1,0 +1,732 @@
+Code,Description
+57011,Operating mode keyswitch in Local position
+5999,Wireless Controller connected
+5002,E-House ARC monitor tripped
+5003,E-House auxiliary transformer switch fuse tripped
+5004,E-House control voltage transformer switch fuse disabled
+5006,Gantry SB1 or SB2 shore supply control voltage supply tripped
+5011,Gantry SB1 main supply fuse tripped
+5012,Gantry SB2 main supply fuse tripped
+5014,E-House LCL-filter 1 fan fuse tripped
+5015,E-House LCL-filter 2 fan fuse tripped
+5016,Gantry SB1 main supply fuse disabled
+5017,Gantry SB2 main supply fuse disabled
+5021,E-House middle voltage switchgear load brake switch open
+5022,E-House middle voltage switchgear fuse blown
+5023,E-House middle voltage switchgear gas pressure low
+5024,E-House middle voltage switchgear -F earthing switch closed
+5027,E-house middle voltage switchgear arc suppressor tripped
+5029,E-house middle voltage switchgear -DE earthing switch closed
+5030,Middle voltage switchgear opening coil fuse feedback
+5031,E-house trolley and trolley girder auxiliary supply switch fuse disabled
+5032,E-house trolley and trolley girder auxiliary supply switch fuse tripped
+5035,Overview camera fuse tripped during remote control
+5040,E-House main transformer high temperature
+5041,E-House main transformer overtemperature
+5042,E-House auxiliary transformer overtemperature
+5057,Infeed unit not started
+5060,Headblock main switch open
+5069,E-House auxiliary 400V supply fuse tripped
+5071,E-House main breaker 24V supply fuse tripped
+5073,Cable reel motor fan supply tripped
+5074,Cable reel motor emergency supply MSP tripped
+5076,Main breaker 480V supply fuse tripped
+5081,Cable reel motor normal supply MSP tripped
+5100,E-House UPS 1 fuse tripped
+5102,Spreader UPS control voltage fuse tripped
+5103,Trolley TG spreader and headblock UPS fuse tripped
+5105,Gantry SB1 UPS supply fuse tripped
+5106,Gantry SB2 UPS supply fuse tripped
+5109,E-house ethernet switch fuse tripped
+5111,E-house 24 VDC power supply unit 1 fuse tripped
+5112,E-house 24 VDC power supply unit 2 fuse tripped
+5118,Gantry position measurement sensor fuse tripped
+5119,E-house PN/PN coupler and CAN/FO converter fuse tripped
+5121,Headblock and spreader main supply fuse tripped
+5122,Hoist and trim position sensors fuse tripped
+5123,Spreader main supply fuse tripped
+5124,E-House PLC fuse tripped
+5126,Infeed unit control unit fuse tripped
+5127,Hoist drive control unit fuse tripped
+5128,Trolley drive control unit fuse tripped
+5129,Power cable reelÂ drive control unit fuse tripped
+5130,Gantry SB1 absolute encoder supply fuse tripped
+5136,Gantry SB1 anti-collision scanner supply fuse tripped
+5138,Gantry SB2 anti-collision scanner supply fuse tripped
+5140,Gantry SB1 ethernet switch supply fuse tripped
+5144,Trolley position sensor 2 fuse tripped
+5147,Gantry SB1 inverter control unit supply tripped
+5148,Gantry SB2 gantry inverter control unit supply tripped
+5152,Trolley remote I/O-device supply fuse tripped
+5153,Trolley girder remote IO modules supply fuse tripped
+5154,Gantry SB1 leg 1 obstacle detection scanner out of order
+5155,Gantry SB1 leg 1 obstacle detection scanner contaminated
+5156,Gantry SB1 leg 2 obstacle detection scanner out of order
+5157,Gantry SB1 leg 2 obstacle detection scanner contaminated
+5158,Gantry SB2 leg 3 obstacle detection scanner out of order
+5159,Gantry SB2 leg 3 obstacle detection scanner contaminated
+5160,Gantry SB2 leg 4 obstacle detection scanner out of order
+5161,Gantry SB2 leg 4 obstacle detection scanner contaminated
+5164,Crane switch control voltage fuse tripped
+5166,Trolley and slewing absolute and incremental encoder fuse tripped
+5167,Trolley ethernet switch 1 fuse tripped
+5168,Trolley ethernet switch 2 fuse tripped
+5170,Gantry SB2 24 VDC supply fuse tripped
+5171,Gantry SB1 24 VDC supply fuse tripped
+5175,E-House remote I/O-device supply fuse tripped
+5179,Spreader 400V supply fuse tripped
+5181,Crane movements blocked
+5182,Crane block movements switch discrepancy
+5187,Gantry SB1 remote I/O-device supply fuse tripped
+5193,Gantry SB2 remote I/O-device supply fuse tripped
+5195,Trolley 24 VDC power supply unit fuse tripped
+5197,Hoist emergency motor 2 supply fuse tripped
+5199,Hoist emergency brake 2 supply fuse tripped
+5200,Hoist emergency motor 1 supply fuse tripped
+5201,Hoist motor thermistor relay tripped
+5202,Hoist motor brake supply fuse tripped
+5203,Hoist emergency brake 1 supply fuse tripped
+5204,Hoist emergency brake valve 1 control monitoring timeout
+5205,Hoist motor brake control monitoring timeout
+5206,Hoist emergency motor chain connected or chain cover open during normal operation
+5207,Hoist up overtravel limit
+5208,Hoist backup overtravel limit
+5209,Hoist down overtravel limit
+5217,Hoist overspeed
+5218,Hoist overload
+5219,Hoist eccentric load
+5221,Hoist profile generator error
+5222,Hoist controller error
+5224,Hoist drive fault
+5226,Hoist sync limit switch discrepancy
+5246,Hoist command direction discrepancy
+5253,Hoist emergency motor overspeed
+5254,Hoist emergency motor chain sensor error
+5255,Hoist emergency motor chain cover sensor error
+5256,Hoist emergency motor control contactor monitoring timeout
+5257,Hoist brake control contactor monitoring timeout
+5258,Hoist emergency brake 1 control contactor monitoring timeout
+5259,Hoist emergency motor not setup for emergency hoist operation
+5260,Hoist emergency brake 2 control contactor monitoring timeout
+5267,Hoist slack rope hoist down movement blocked
+5269,Hoist emergency brake valve 2 control monitoring timeout
+5270,Hoist slow down check down
+5273,Hoist too high speed on landing
+5275,Hoist drive not detected
+5276,Gantry SB1 brakes normal supply fuse tripped
+5277,Gantry SB2 brakes normal supply fuse tripped
+5285,Gantry overspeed when hoist lowered
+5286,Trolley overspeed when hoist lowered
+5289,Hoist calibration sensor fault during calibration
+5290,Gantry SB1 motor 2.6 thermistor relay tripped
+5291,Hoist emergency motor 1 brake fuse tripped
+5292,Hoist emergency motor 2 brake fuse tripped
+5293,Gantry SB1 motor 1.6 thermistor relay tripped
+5298,Gantry SB1 motor 1.1 fuse tripped
+5299,GantrySB1 motor 1.2 fuse tripped
+5300,Gantry SB1 motor 1.3 fuse tripped
+5301,Gantry SB1 motor 1.4 fuse tripped
+5302,Gantry SB1 motor 1.5 fuse tripped
+5303,Gantry SB1 motor 2.1 fuse tripped
+5304,Gantry SB1 motor 2.2 fuse tripped
+5305,Gantry SB1 motor 2.3 fuse tripped
+5306,Gantry SB1 motor 2.4 fuse tripped
+5307,Gantry SB1 motor 2.5 fuse tripped
+5308,Gantry SB2 motor 3.1 fuse tripped
+5309,Gantry SB2 motor 3.2 fuse tripped
+5310,Gantry SB2 motor 3.3 fuse tripped
+5311,Gantry SB2 motor 3.4 fuse tripped
+5312,Gantry SB2 motor 3.5 fuse tripped
+5313,Gantry SB2 motor 4.1 fuse tripped
+5314,Gantry SB2 motor 4.2 fuse tripped
+5315,Gantry SB2 motor 4.3 fuse tripped
+5316,Gantry SB2 motor 4.4 fuse tripped
+5317,Gantry SB2 motor 4.5 fuse tripped
+5318,Gantry SB1 brake 1.1 fuse tripped
+5319,Gantry SB1 brake 1.2 fuse tripped
+5320,Gantry SB1 brake 1.3 fuse tripped
+5321,Gantry SB1 brake 1.4 fuse tripped
+5322,Gantry SB1 brake 1.5 fuse tripped
+5323,Gantry SB1 brake 2.1 fuse tripped
+5324,Gantry SB1 brake 2.2 fuse tripped
+5325,Gantry SB1 brake 2.3 fuse tripped
+5326,Gantry SB1 brake 2.4 fuse tripped
+5327,Gantry SB1 brake 2.5 fuse tripped
+5328,Gantry SB2 brake 3.1 fuse tripped
+5329,Gantry SB2 brake 3.2 fuse tripped
+5330,Gantry SB2 brake 3.3 fuse tripped
+5331,Gantry SB2 brake 3.4 fuse tripped
+5332,Gantry SB2 brake 3.5 fuse tripped
+5334,Gantry SB1 motor 1.6 fuse tripped
+5335,Gantry SB1 brake 1.1 control monitoring timeout
+5336,Gantry SB1 brake 1.2 control monitoring timeout
+5337,Gantry SB1 brake 1.3 control monitoring timeout
+5338,Gantry SB1 brake 1.4 control monitoring timeout
+5339,Gantry SB1 brake 1.5 control monitoring timeout
+5340,Gantry SB1 brake 2.1 control monitoring timeout
+5341,Gantry SB1 brake 2.2 control monitoring timeout
+5342,Gantry SB1 brake 2.3 control monitoring timeout
+5343,Gantry SB1 brake 2.4 control monitoring timeout
+5344,Gantry SB1 brake 2.5 control monitoring timeout
+5345,Gantry SB2 brake 3.1 control monitoring timeout
+5346,Gantry SB2 brake 3.2 control monitoring timeout
+5347,Gantry SB2 brake 3.3 control monitoring timeout
+5348,Gantry SB2 brake 3.4 control monitoring timeout
+5363,Gantry SB1 motor 1.1 thermistor relay tripped
+5364,Gantry SB1 motor 1.2 thermistor relay tripped
+5365,Gantry SB1 motor 1.3 thermistor relay tripped
+5366,Gantry SB1 motor 1.4 thermistor relay tripped
+5367,Gantry SB1 motor 1.5 thermistor relay tripped
+5368,Gantry SB1 motor 2.1 thermistor relay tripped
+5369,Gantry SB1 motor 2.2 thermistor relay tripped
+5370,Gantry SB2 motor 2.3 thermistor relay tripped
+5371,Gantry SB2 motor 2.4 thermistor relay tripped
+5372,Gantry SB2 motor 2.5 thermistor relay tripped
+5373,Gantry SB2 motor 3.1 thermistor relay tripped
+5374,Gantry SB2 motor 3.2 thermistor relay tripped
+5375,Gantry SB2 motor 3.3 thermistor relay tripped
+5376,Gantry SB2 motor 3.4 thermistor relay tripped
+5382,Gantry skew position deviation too large
+5391,Gantry movements blocked during motion
+5397,Gantry positive direction overtravel limit
+5398,Gantry negative direction overtravel limit
+5399,Gantry SB1 overspeed
+5400,Gantry SB2 overspeed
+5401,Gantry SB1 motor 2.6 fuse tripped
+5402,Gantry SB1 profile generator error
+5403,Gantry SB2 motor 3.6 fuse tripped
+5404,Gantry SB2 motor 4.6 fuse tripped
+5405,Gantry SB1 drive fault
+5415,Cabin 400V supply fuse tripped
+5425,Gantry unsynchronized command
+5426,Gantry SB2 profile generator error
+5429,Gantry SB2 drive fault
+5430,Gantry SB1 brake 1.6 fuse tripped
+5431,Gantry SB1 brake 2.6 fuse tripped
+5432,Gantry SB2 brake 3.6 fuse tripped
+5434,Gantry SB1 brake 4.6 fuse tripped
+5450,Gantry SB2 brake 4.1 fuse tripped
+5451,Gantry SB2 brake 4.2 fuse tripped
+5452,Gantry SB2 brake 4.3 fuse tripped
+5453,Gantry SB2 brake 4.4 fuse tripped
+5454,Gantry SB2 brake 4.5 fuse tripped
+5457,Gantry SB2 brake 3.5 control monitoring timeout
+5458,Gantry SB2 brake 4.1 control monitoring timeout
+5459,Gantry SB2 brake 4.2 control monitoring timeout
+5460,Gantry SB2 brake 4.3 control monitoring timeout
+5461,Gantry SB2 brake 4.4 control monitoring timeout
+5462,Gantry SB2 brake 4.5 control monitoring timeout
+5463,Gantry SB2 motor 3.5 thermistor relay tripped
+5464,Gantry SB2 motor 4.1 thermistor relay tripped
+5465,Gantry SB2 motor 4.2 thermistor relay tripped
+5466,Gantry SB2 motor 4.3 thermistor relay tripped
+5467,Gantry SB2 motor 4.4 thermistor relay tripped
+5468,Gantry SB2 motor 4.5 thermistor relay tripped
+5469,Gantry SB2 motor 3.6 thermistor relay tripped
+5470,Gantry SB2 motor 4.6 thermistor relay tripped
+5472,Gantry stop speed deviation
+5478,Gantry SB1 brake control contactor monitoring timeout
+5479,Gantry SB2 brake control contactor monitoring timeout
+5480,Gantry slow down check landside
+5481,Gantry slow down check waterside
+5482,Gantry SB1 drive not detected
+5489,Spare
+5490,Spare
+5491,Gantry SB2 drive not detected
+5492,Spare
+5493,Gantry SB1 brake 1.6 control monitoring timeout
+5494,Gantry SB1 brake 2.6 control monitoring timeout
+5495,Gantry SB2 brake 3.6 control monitoring timeout
+5496,Gantry SB2 brake 4.6 control monitoring timeout
+5498,Spare
+5499,Spare
+5500,Trolley SB2 side overtravel limit
+5501,Trolley SB1 side overtravel limit
+5502,Trolley motor 1 supply fuse tripped
+5503,Trolley motor 2 supply fuse tripped
+5504,Trolley motor 3 supply fuse tripped
+5505,Trolley motor 4 supply fuse tripped
+5507,Trolley brakes supply fuse tripped
+5508,Trolley brake 1 supply fuse tripped
+5509,Trolley brake 2 supply fuse tripped
+5510,Trolley brake 3 supply fuse tripped
+5511,Trolley brake 4 supply fuse tripped
+5512,Trolley brake 1 control monitoring timeout
+5513,Trolley brake 2 control monitoring timeout
+5514,Trolley brake 3 control monitoring timeout
+5515,Trolley brake 4 control monitoring timeout
+5520,Trolley motor 1 thermistor relay tripped
+5521,Trolley motor 2 thermistor relay tripped
+5522,Trolley motor 3 thermistor relay tripped
+5523,Trolley motor 4 thermistor relay tripped
+5527,Trolley overspeed
+5536,Trolley profile generator error
+5539,Trolley drive fault
+5563,Trolley block movement switch discrepancy
+5564,Trolley movements blocked during motion
+5568,Trolley brake control contactor monitoring timeout
+5569,Trolley drive not detected
+5570,Trolley position setpoint out of range
+5585,Trolley movements blocked
+5590,Gantry block movement switch discrepancy
+5591,Trolley position verification not detected
+5595,Gantry SB1 position reference sensor error
+5596,Gantry SB2 position reference sensor error
+5597,Gantry movements blocked
+5598,Gantry SB1 reference tag not detected
+5599,Gantry SB2 reference tag not detected
+5603,Spreader cable slack
+5608,Slewing brake 1 supply fuse tripped
+5609,Slewing brake 2 supply fuse tripped
+5610,Slewing backlash tightening took too long
+5611,Slewing motor 1 thermistor relay tripped
+5612,Slewing motor 2 thermistor relay tripped
+5613,Slewing motor 1 supply fuse tripped
+5614,Slewing motor 2 supply use tripped
+5622,Slewing drive not detected in profinet
+5624,Slewing drive fault
+5625,Slewing movements blocked
+5626,Trim drive not detected in profinet
+5628,Trim drive fault
+5629,Trim movements blocked
+5630,Trim single motor mode activation unsuccessful
+5650,Power cable reel brake fuse tripped
+5651,Power cable reel motor thermistor overtemperature
+5652,Power cable reel brake 24V supply fuse tripped
+5653,Power cable reel brake monitoring timeout
+5654,Power cable reel full
+5655,Power cable reel empty
+5657,Power cable reel slack cable
+5658,Power cable reel tight cable
+5667,Power cable reel drive not detected
+5668,Power cable reel drive error
+5669,Power cable reel brake inconsistent state
+5670,Power cable reel overspeed
+5671,Power cable reel DC bus fault
+5672,Power cable reel collective failure
+5673,Power cable reel parameter set incorrect
+5674,Power cable reel brake control contactor monitoring timeout
+5675,Power cable reel platform extended
+5678,Power cable reel drive fault
+5689,Trolley girder 24V transformer supply fuse tripped
+5700,Spreader auxiliary supply fuse tripped
+5701,Spreader main supply fuse tripped
+5703,Spreader twistlock locked and unlocked sensor missing corner 1
+5704,Spreader twistlock locked and unlocked sensor missing corner 2
+5705,Spreader twistlock locked and unlocked sensor missing corner 3
+5706,Spreader twistlock locked and unlocked sensor missing corner 4
+5754,Spreader absolute encoder fault
+5760,Headblock hydraulic power unit supply feedback
+5770,Spreader telescope no movement
+5784,Spreader node missing
+5785,Trolley slow down check
+5796,Headblock micromovements main breaker tripped
+5798,Spreader manual command speed error
+5805,Slewing motor 1 maintenance switch on
+5806,Slewing motor 2 maintenance switch on
+5807,Slewing motor 1 contactor feedback missing
+5808,Slewing motor 2 contactor feedback missing
+5810,E-House auxiliary normal supply control voltage supply fuse tripped
+5812,E-House 400 V auxiliary normal supply fuse tripped
+5813,E-House shore supply fuse tripped
+5817,Drives infeed units control voltage fuse tripped
+5819,Drives infeed main breaker auxiliary supply fuse tripped
+5820,Drives infeed main breaker tripped
+5821,Hoist gantry and trolley drive unit control voltage fuse tripped
+5835,Headblock micromovements front cylinder position deviation from setpoint
+5836,Headblock micromovements left cylinder position deviation from setpoint
+5847,Headblock micromovements cylinder 1 communication lost
+5848,Headblock micromovements cylinder 2 communication lost
+5849,Headblock micromovements cylinder 3 communication lost
+5850,Headblock micromovements cylinder 4 communication lost
+5856,Headblock proportional valve controller fuse tripped
+5857,Headblock 12 VDC power supply unit fuse tripped
+5858,Headblock supply contactor feedback missing
+5861,Headblock remote IO supply fuse tripped
+5873,Headblock pump off when crane on
+5880,Spreader jammed 20 ft
+5881,Spreader jammed 40 ft
+5882,Spreader jammed 45 ft
+5883,Spreader telescope 20 ft indicated outside position limits
+5884,Spreader telescope 40 ft indicated outside position limits
+5885,Spreader telescope 45 ft indicated outside position limits
+5890,Spreader supply contactor feedback missing
+5892,Spreader not connected
+5893,Trolley headblock main supply fuse tripped
+5896,Spreader jammed 30 ft
+5899,Spreader telescope 30 ft indicated outside position limits
+5900,Gantry position lost
+5901,Trolley position lost
+5902,Hoist position lost
+5903,Slewing position lost
+5904,Trim position lost
+5905,Hoist safety position lost
+5906,Trolley safety position lost
+5907,Gantry SB1 safety position lost
+5908,Gantry SB2 safety position lost
+5913,E-House fire alarm system supply
+5914,E-House fire alarm system malfunction
+5915,E-House fire alarm
+5916,T-House fire alarm
+5919,Micromotions gateway connection fault
+5920,Micromotions gateway fault
+5921,Spreader gateway connection fault
+5922,Spreader gateway fault
+5923,Network analyzer fault
+5928,Spreader control system communication break
+5935,Crane movement lock switch enabled in SB1
+5936,Crane movement lock switch discrepancy in SB1
+5937,Crane movement lock switch enabled in SB2
+5938,Crane movement lock switch discrepancy in SB2
+5939,Gantry movement lock switch enabled at crane access control stand
+5940,Gantry movement lock switch discrepancy at crane access control stand
+5941,Trolley movement lock switch enabled at hoisting platform
+5942,Trolley movement lock switch discrepancy at hoisting platform
+5943,Trolley and slewing movement lock switch enabled at trolley girder
+5944,Trolley and slewing movement lock switch discrepancy at trolley girder
+5945,Hoist slewing and trim movement lock switch enabled at hoisting platform
+5946,Hoist slewing and trim movement lock switch discrepancy at hoisting platform
+5968,Headblock load cell sensor 1 fault
+5969,Headblock load cell sensor 2 fault
+5970,Headblock load cell sensor 3 fault
+5971,Headblock load cell sensor 4 fault
+5972,Headblock load cell sensor 1 not found
+5973,Headblock load cell sensor 2 not found
+5974,Headblock load cell sensor 3 not found
+5975,Headblock load cell sensor 4 not found
+5981,E-House remote I/O-device fault
+5983,Trolley remote I/O-device fault
+5988,Gantry SB1 remote I/O-device fault
+5989,Gantry SB2 remote I/O-device fault
+5990,Headblock remote I/O-device fault
+6000,E-House control voltage transformer supply tripped
+6002,Gantry SB1 drive communication not respond
+6003,Gantry SB2 drive communication not respond
+6004,Hoist drive communication not respond
+6005,Trolley drive communication not respond
+6006,Slewing drive communication not respond
+6007,Trim drive communication not respond
+6024,Control stand selection watchdog error
+6155,Slewing negative direction overtravel
+6156,Slewing positive direction overtravel
+6157,Slewing brake 1 control contactor monitoring timeout
+6158,Slewing brake 2 control contactor monitoring timeout
+6159,Slewing brake 1 control monitoring timeout
+6160,Slewing brake 2 control monitoring timeout
+6161,Trim brake 1 control contactor monitoring timeout
+6162,Trim brake 2 control contactor monitoring timeout
+6163,Trim brake 1 control monitoring timeout
+6164,Trim brake 2 control monitoring timeout
+6166,Stairs to Trolley gate diagnostic inconsistent state
+6167,Trolley to Stairs gate diagnostic inconsistent state
+6168,Trolley to Slewing tunnel gate diagnostic inconsistent state
+6169,Trolley girder to Slewing tunnel door diagnostic inconsistent state
+6170,Middle voltage switchgear opening relay control monitoring timeout
+6171,Headblock supply contactor monitoring timeout
+6234,Trolley storm locks control timeout
+6235,Trolley storm locking configuration incorrect
+6236,Trolley storm locks inconsistent state
+6350,Gantry storm locks control timeout
+6351,Gantry storm locks configuration incorrect
+6352,Gantry storm locks inconsistent state
+6390,Ee-house overtemperature at level 2
+6391,Ee-house overtemperature at level 3
+6446,Gantry SB1 main supply switch open
+6480,Gantry SB2 main supply switch open
+6486,Gantry SB2 ethernet switch supply fuse tripped
+6488,Trolley girder main supply fuse tripped
+6489,Trolley girder trolley main supply fuse tripped
+6490,Trolley girder main supply switch open
+6491,Trolley main supply fuse tripped
+6492,Trolley main supply switch open
+6501,Power cable reel drive ID run not done
+6508,E-House remote I/O connection lost
+6509,Trolley girder remote I/O connection lost
+6510,Trolley remote I/O connection lost
+6511,Headblock remote I/O connection lost
+6512,Gantry SB1 remote I/O connection lost
+6513,Gantry SB2 remote I/O connection lost
+6514,Cabin remote I/O connection lost
+6515,Cabin remote I/O device lost
+6516,Trolley girder remote I/O device lost
+6517,Gantry SB1anti-collision supply fuse tripped
+6528,Slewing drive control unit supply fuse tripped
+6529,Slewing brake supply fuse tripped
+6539,Trim motor 1 thermistor relay tripped
+6540,Trim motor 2 thermistor relay tripped
+6543,Trim motor 1 supply fuse tripped
+6544,Trim motor 2 supply fuse tripped
+6553,Trim drive control unit supply fuse tripped
+6554,Trim brake supply fuse tripped
+6600,Trim position measurement out of range
+6601,Trim overspeed
+6609,Trim movements blocked during motion
+6610,Trim profile generator error
+6627,Headblock oil level low
+6636,Slewing position measurement out of range
+6637,Slewing overspeed
+6640,Slewing profile generator error
+6651,Slewing drive not detected
+6652,Slewing movement blocked during motion
+6662,Hoist motor brake 2 supply fuse tripped
+6663,Hoist brake 2 control contactor monitoring timeout
+6664,Hoist motor brake 2 control monitoring timeout
+6665,Trolley main girder 2 movement lock switch enabled
+6666,Trolley main girder 2 movement lock switch discrepancy
+6667,Trolley main girder 1 movement lock switch enabled
+6668,Trolley main girder 1 movement lock switch discrepancy
+6669,Hoist movement lock switch enabled at hoisting platform
+6670,Hoist movements blocked during motion
+6672,Hoist movements blocked
+6673,Hoist movement lock switch discrepancy
+6700,Infeed module general fault
+6701,Infeed module line supply under voltage
+6702,Infeed module failure of one or several line phases
+6703,Infeed module voltage dip in one or several line phases
+6704,Infeed module summed current too high
+6705,Infeed module line supply over voltage
+6706,Infeed module supply incorrect voltage
+6707,Infeed module infeed operation missing
+6709,Infeed module temperature too high
+6712,Stairs to main girder 1 gate diagnostic inconsistent state
+6714,E-house to main girder 1 gate diagnostic inconsistent state
+6716,Main girder 1 to trolley maintenance position 1 gate diagnostic inconsistent state
+6718,Main girder 1 to trolley maintenance position 2 gate diagnostic inconsistent state
+6720,Main girder 1 to trolley maintenance position 3 gate diagnostic inconsistent state
+6722,Main girder 2 to trolley maintenance position 1 gate diagnostic inconsistent state
+6724,Main girder 2 to trolley maintenance position 2 gate diagnostic inconsistent state
+6726,Main girder 2 to trolley maintenance position 3 gate diagnostic inconsistent state
+6728,Trolley maintenance position gate diagnostic inconsistent state
+6730,Trolley corner 1 gate diagnostic inconsistent state
+6732,Trolley corner 3 gate diagnostic inconsistent state
+6734,Trolley corner 4 gate diagnostic inconsistent state
+6736,Gantry SB1 gate diagnostic inconsistent state
+6738,Gantry SB2 gate diagnostic inconsistent state
+6757,Gantry SB1 bogie 1 emergency stop button 2
+6758,Gantry SB1 bogie 1 emergency stop button 2 discrepancy
+6759,Gantry SB1 bogie 2 emergency stop button 2
+6760,Gantry SB1 bogie 2 emergency stop button 2 discrepancy
+6761,Gantry SB1 bogie 2 control panel emergency stop button
+6762,Gantry SB1 bogie 2 control panel emergency stop button discrepancy
+6763,Gantry SB2 bogie 3 emergency stop button 2
+6764,Gantry SB2 bogie 3 emergency stop button 2 discrepancy
+6765,Gantry SB2 bogie 4 emergency stop button 2
+6766,Gantry SB2 bogie 4 emergency stop button 2 discrepancy
+6767,Gantry SB1 emergency stop button
+6768,Gantry SB1 emergency stop button discrepancy
+6769,Gantry SB2 emergency stop button
+6770,Gantry SB2 emergency stop button discrepancy
+6791,Wireless crane fast stop
+6792,Wireless gantry fast stop
+6793,E-House emergency stop button 1
+6794,E-House emergency stop button 1 discrepancy
+6795,E-House emergency stop button 2
+6796,E-House emergency stop button 2 discrepancy
+6797,E-House control stand emergency stop button
+6798,E-House control stand emergency stop button discrepancy
+6799,Main girder 1 emergency stop button 1
+6800,Main girder 1 emergency stop button 1 discrepancy
+6801,Main girder 1 emergency stop button 2
+6802,Main girder 1 emergency stop button 2 discrepancy
+6803,Main girder 1 control panel emergency stop button
+6804,Main girder 1 control panel emergency stop button discrepancy
+6805,Main girder 2 emergency stop button 1
+6806,Main girder 2 emergency stop button 1 discrepancy
+6807,Main girder 2 emergency stop button 2
+6808,Main girder 2 emergency stop button 2 discrepancy
+6809,Main girder 2 control panel emergency stop button
+6810,Main girder 2 control panel emergency stop button discrepancy
+6811,Gantry SB1 bogie 1 emergency stop button
+6812,Gantry SB1 bogie 1 emergency stop button discrepancy
+6813,Gantry SB1 bogie 2 emergency stop button
+6814,Gantry SB1 bogie 2 emergency stop button discrepancy
+6815,Gantry SB1 control panel emergency stop button
+6816,Gantry SB1 control panel emergency stop button discrepancy
+6817,Gantry SB2 bogie 3 emergency stop button 1
+6818,Gantry SB2 bogie 3 emergency stop button 1 discrepancy
+6819,Gantry SB2 bogie 4 emergency stop button 1
+6820,Gantry SB2 bogie 4 emergency stop button 1 discrepancy
+6821,Cable reel emergency stop button 1
+6822,Cable reel emergency stop button 1 discrepancy
+6823,Gantry SB2 control panel emergency stop button
+6824,Gantry SB2 control panel emergency stop button discrepancy
+6826,Wirelless control stand emergency stop button discrepancy
+6827,Trolley girder trolley side control panel emergency stop button
+6828,Trolley girder trolley side control panel emergency stop button discrepancy
+6829,Trolley girder main girder 1 side control panel emergency stop button
+6830,Trolley girder MG 1 side control panel emergency stop button discrepancy
+6831,Trolley girder main girder 2 side control panel emergency stop button
+6832,Trolley girder MG 2 side control panel emergency stop button discrepancy
+6833,Trolley girder control panel emergency stop button
+6834,Trolley girder control panel emergency stop button discrepancy
+6835,Slewing tunnel emergency stop button
+6836,Slewing tunnel emergency stop button discrepancy
+6837,Trolley control panel emergency stop button
+6838,Trolley control panel emergency stop button discrepancy
+6839,Trolley trolley girder side control panel emergency stop button
+6840,Trolley trolley girder side control panel emergency stop button discrepancy
+6841,Trolley stairs side control panel emergency stop button
+6842,Trolley stairs side control panel emergency stop button discrepancy
+6843,Headblock emergency stop button
+6844,Headblock emergency stop button discrepancy
+6845,Gantry SB2 bogie 4 control panel emergency stop button
+6846,Gantry SB2 bogie 4 control panel emergency stop button discrepancy
+6847,Stairs control stand emergency stop button
+6848,Stairs control stand emergency stop button discrepancy
+6849,Trolley emergency stop button
+6850,Trolley emergency stop button discrepancy
+6851,Cabin emergency stop button
+6852,Cabin emergency stop button discrepancy
+6853,E-House emergency stop button 3
+6854,E-House emergency stop button 3 discrepancy
+6855,E-House emergency stop button 4
+6856,E-House emergency stop button 4 discrepancy
+6857,E-House emergency stop button 5
+6858,E-House emergency stop button 5 discrepancy
+6859,Main girder 1 emergency stop button 3
+6860,Main girder 1 emergency stop button 3 discrepancy
+6861,Main girder 2 emergency stop button 3
+6862,Main girder 2 emergency stop button 3 discrepancy
+6863,Stairs - Main girder 1 main access emergency stop button
+6864,Stairs - Main girder 1 main access emergency stop button discrepancy
+6865,E-House - Main girder 1 Second access emergency stop button
+6866,E-House - Main girder 1 Second access emergency stop button discrepancy
+6867,Trolley emergency stop button 2
+6868,Trolley emergency stop button 2 discrepancy
+6869,Trolley emergency stop button 3
+6870,Trolley emergency stop button 3 discrepancy
+6871,Trolley emergency stop button 4
+6872,Trolley emergency stop button 4 discrepancy
+6873,Trolley emergency stop button 5
+6874,Trolley emergency stop button 5 discrepancy
+6875,Trolley emergency stop button 6
+6876,Trolley emergency stop button 6 discrepancy
+6877,Trolley emergency stop button 7
+6878,Trolley emergency stop button 7 discrepancy
+6879,Trolley emergency stop button 8
+6880,Trolley emergency stop button 8 discrepancy
+6881,Trolley emergency stop button 9
+6882,Trolley emergency stop button 9 discrepancy
+6892,Collision imminent gantry positive direction
+6893,Collision imminent gantry negative direction
+6894,Collision imminent trolley positive direction
+6895,Collision imminent trolley negative direction
+6896,Collision imminent hoist positive direction
+6897,Collision imminent hoist negative direction
+6898,Collision imminent slewing positive direction
+6899,Collision imminent slewing negative direction
+6908,Cabin collision prevention (emergency stop)
+6909,Cabin collision prevention (slow down check)
+6910,Cable reel emergency stop button 2
+6911,Cable reel emergency stop button 2 discrepancy
+6936,Hoist winding temperature 1 over trip limit
+6937,Hoist winding temperature 2 over trip limit
+6938,Hoist winding temperature 3 over trip limit
+6939,Hoist motor DE bearing temperature over trip limit
+6940,Hoist motor NDE bearing temperature over trip limit
+6941,Hoist gearbox 1 oil temperature over trip limit
+6942,Hoist gearbox 2 oil temperature over trip limit
+6955,Hoist position out of range
+6956,Trolley position out of range
+6978,UPS critical battery level
+6979,Crane control PLC hardware changed
+6980,Crane control PLC program changed
+6981,Crane control PLC cycle time monitoring
+6982,Crane control PLC programming interrupted unexpectedly
+52005,Hoist safety encoder calibration not successful
+52006,Trolley safety encoder calibration not successful
+52019,Hoist encoder scaling calculation fault
+52020,Trolley encoder scaling calculation fault
+52022,Hoist encoder position scaling function invalid input
+52023,Trolley encoder position scaling function invalid input
+52036,Hoist encoder speed scaling calculation fault
+52045,AGS sensor offset calculation fault
+52046,AGS sensors 1 and 2 too different value
+52047,AGS sensors 3 and 4 too different value
+52048,Gantry frame deviation too large
+52049,Rail deviation scaling calculation fault
+52050,Rail deviation scaling invalid parameter
+52051,Rail deviation calculation fault
+52090,Calculation fault while converting machine coordinate to module coordinate gantry front
+52091,Calculation fault while converting machine coordinate to module coordinate gantry rear
+52313,Slewing sensor 1 error
+52314,Slewing sensor 1 referencing error
+52316,Slewing verification error
+52320,Slewing calibration error
+52322,Trim position measurement out of range
+52323,Trim sensor 1 error
+52325,Trim verification error
+52330,Caclulation fault in gantry position coordinate conversion
+52332,Hoist 2 safety encoder calibration not successful
+52334,Hoist 2 speed calculation fault
+52335,Hoist 2 encoder scaling invalid input
+54000,OG - Safety Positioning: Sanity check failed (standard program)
+54001,OG - Safety Positioning: Sanity check failed (safety program)
+54002,OG - Safety Positioning: Internal communication error
+54004,OG - Safety Positioning: Communication lost to Primary channel Positioning System
+54005,OG - Safety Positioning: Primary channel reported unknown position
+54008,OG - Safety Positioning: CHE position is unknown
+54010,OG - Safety Positioning: Test channel counter module error
+54011,OG - Safety Positioning: Calculation error (standard program)
+54021,OG - Geofence: Collision Data Overflow
+54022,OG - Geofence: Configuration error in terminal limits
+54025,OG - Geofence: Auto CHE collided with a SafeZone
+54026,OG - Geofence: Static GeoZones CRC error
+54027,OG - Geofence: Static GeoZones communication error
+54028,OG - Geofence: Dynamic GeoZones CRC error
+54029,OG - Geofence: Dynamic GeoZones communication error
+54030,OG - Geofence: Sanity check failed
+54031,OG - Geofence: Calculation error
+54032,OG - Geofence: CHE frame box function sanity check failed
+54033,OG - Geofence: CHE frame box function calculation error
+54034,OG - Geofence: CHE dynamic collision box function sanity check failed
+54035,OG - Geofence: CHE dynamic collision box function calculation error
+54036,OG - Geofence: Safe height collision
+54040,OG - Communication lost to Onboard safety (system data)
+54045,OG - Geofence: Quadtree Combined Error
+54067,OG - Transponder Safety Positioning: Sanity check failed (standard program)
+54068,OG - Transponder Safety Positioning: Calculation error (standard program)
+54069,Transponder Safety Positioning: Primary channel counter module error
+54073,OG - Transponder Safety Positioning: Communication lost to Primary channel Positioning System
+54074,OG - Transponder Safety Positioning: Test channel counter module error
+54076,OG - Transponder Safety Positioning: Dead reckoning failure
+54077,OG - Transponder Safety Positioning: Sanity check failed
+54078,OG - Transponder Safety Positioning: Odometry sanity check failed
+54079,OG - Transponder Safety Positioning: Calculation error
+54080,OG - Safety steering: Signal discrepancy error
+54081,OG - Safety steering: Analog input module error
+54082,OG - Safety steering: Signal wire break
+54083,OG - Transponder Safety Positioning: CHE position is unknown
+54084,OG - Transponder Safety Positioning: Primary channel reported unknown position
+54085,OG - Transponder Safety Positioning: Communication lost to Test channel Positioning System
+54092,OG - MultiNav: Position discrepancy error
+54094,OG - MultiNav: Heading discrepancy error
+54105,OG - Assisting stability control: Stability limit exceeded
+54106,OG - Assisting stability control: Sanity check failed
+54107,OG - Assisting stability control: Calculation error
+54109,OG - Stability control: Stability limit exceeded
+54110,OG - Stability control: Input data unknown
+54111,OG - Stability control: Sanity check failed
+54112,OG - Stability control: Calculation error
+54118,OG - Safe Spreader Length: Unsupported spreader length
+54119,OG - Safe Spreader Length: Front sensor watchdog timeout
+54120,OG - Safe Spreader Length: Front sensor discrepancy error
+54121,OG - Safe Spreader Length: Front sensor internal error
+54122,OG - Safe Spreader Length: Rear sensor watchdog timeout
+54123,OG - Safe Spreader Length: Rear sensor discrepancy error
+54124,OG - Safe Spreader Length: Rear sensor internal error
+54125,OG - Safe Spreader Length: Discrepancy error between front and rear measurements
+54126,OG - Safe Spreader Length: Front sensor value out of range
+54127,OG - Safe Spreader Length: Rear sensor value out of range
+54129,OG - Geofence: Safe Spreader Length collision (Spreader length longer than zone allows)
+54130,OG - Geofence: Safe Spreader Length collision (Container longer than spreader in a zone that requires Safe Spreader Length)
+54131,OG - Geofence: Safe Spreader Length collision requires reset
+54133,OG - Geofence: Zone speed limit exceeded
+54134,OG - Geofence: Zone speed limit function sanity failed
+54998,OG - Alarm list is full
+54999,OG - Buffer for sending alarms to upper level is full!
+5758,Twistlock status unknown
+57042,Twistlock open above permission height
+55904,Local attention needed for alarms
+55002,MMBF fault active
+55814,Unknown twsitlock status

@@ -3,5 +3,15 @@
 *.duckdb
 *.xml
 
-# If you want to keep the whitelist but ignore the giant export, use:
-# !MMBF_whitelist.csv
+# EXCEPTION: Explicitly track the whitelist file
+!MMbf_whitelist.csv
+
+# --- NEW ADDITIONS ---
+# Ignore Python bytecode
+__pycache__/
+
+# Ignore specific test file
+test.py
+
+# Ignore the archive folder
+archive/
