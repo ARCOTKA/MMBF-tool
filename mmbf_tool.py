@@ -1,6 +1,6 @@
 """
 Forensic analysis tool for RMG Fleet (RMG01 - RMG12) maintenance logs.
-Version: 9.1 - Features: Transient/Chatter Analysis (Overlap Fix), Predictive Storm Tracking, Forensic Audit
+Version: 9.6 - Features: Insights Tab (Individual Toggles), Predictive Storm Tracking, Forensic Audit (Strict Logic)
 """
 
 import io
@@ -257,6 +257,8 @@ def get_maintenance_sessions(crane_id, start_date, end_date, db_path, whitelist_
                             'is_whitelisted': 'True' if int(idx) in whitelist_indices else 'False'
                         })
 
+            # REMOVED: Lookback Strategy block has been removed as requested.
+
             w_start_str = w_start.strftime('%Y-%m-%d %H:%M:%S')
             saved = meta_df[meta_df['session_start'] ==
                             w_start_str] if not meta_df.empty else pd.DataFrame()
@@ -331,7 +333,6 @@ def get_transient_faults(crane_id, start_date, end_date, db_path, whitelist_indi
 
     try:
         # 1. Get Manual Mode (57011) Windows
-        # We assume if 57011 is ON, maintenance is happening.
         manual_query = """
             SELECT (alarm_date || ' ' || alarm_time)::TIMESTAMP as ts, UPPER(alarm_state) as state
             FROM alarm_logs
@@ -355,15 +356,13 @@ def get_transient_faults(crane_id, start_date, end_date, db_path, whitelist_indi
                 manual_intervals.append((current_start, row.ts))
                 current_start = None
 
-        # 2. Get All Fault ON/OFF Events efficiently using Window Functions
-        # We pair every ON with its subsequent event to determine duration.
-        # If the subsequent event is OFF, we have a duration. If ON (double trigger), duration is 0.
+        # 2. Get All Fault ON/OFF Events
         wl_clause = ""
         if only_whitelist and whitelist_indices:
             wl_ids = ", ".join(map(str, whitelist_indices))
             wl_clause = f"AND alarm_index IN ({wl_ids})"
         elif only_whitelist and not whitelist_indices:
-            return pd.DataFrame(), pd.DataFrame()  # Whitelist requested but empty
+            return pd.DataFrame(), pd.DataFrame()
 
         fault_query = f"""
             WITH raw_events AS (
@@ -393,50 +392,29 @@ def get_transient_faults(crane_id, start_date, end_date, db_path, whitelist_indi
             return pd.DataFrame(), pd.DataFrame()
 
         # 3. Filter out faults that occurred during Manual Mode
-        # Optimized Python filtering using bisect is faster than complex SQL join on inequalities
-
-        # Ensure manual intervals are sorted (they should be)
-        # We need a list of start times and end times for bisect
         man_starts = [x[0] for x in manual_intervals]
         man_ends = [x[1] for x in manual_intervals]
 
         transient_faults = []
 
-        # Iterate and Filter
         for row in faults_df.itertuples():
             f_start = row.start_ts
-            f_end = row.end_ts  # We need to ensure end_ts is not None/NaT if we rely on it
-
-            # bisect_right returns the insertion point i such that all e in a[:i] have e <= x
-            # We want to find manual intervals that might overlap.
-            # An overlap occurs if (StartA <= EndB) and (EndA >= StartB)
-            # Here A is Fault, B is Manual.
-            # So: (f_start < m_end) AND (f_end > m_start)
 
             idx = bisect.bisect_right(man_starts, f_start) - 1
-
             is_manual = False
 
-            # Check the interval that started before or exactly at f_start
             if idx >= 0:
-                # If the manual session ends after the fault starts, we have an overlap
                 if f_start < man_ends[idx]:
                     is_manual = True
 
-            # Check the NEXT interval (which starts after f_start)
-            # The fault might have started before this manual session, but ends inside it.
             if not is_manual and (idx + 1) < len(man_starts):
-                # If the fault ends after the next manual session starts, we have an overlap
-                # Note: f_end is "row.end_ts". If the fault is still active (no end_ts), we assume no future overlap for now.
                 if row.end_ts and row.end_ts > man_starts[idx + 1]:
                     is_manual = True
 
             if not is_manual:
-                # Calculate Duration
                 duration_sec = 0.0
                 if row.next_state and 'OFF' in row.next_state and row.end_ts:
                     duration_sec = (row.end_ts - f_start).total_seconds()
-                    # Handle negative duration if DB is weird, or huge duration
                     if duration_sec < 0:
                         duration_sec = 0
 
@@ -454,15 +432,12 @@ def get_transient_faults(crane_id, start_date, end_date, db_path, whitelist_indi
         df_trans = pd.DataFrame(transient_faults)
 
         # 4. Aggregation for Summary Table
-        # We need: Frequency, Avg Duration, Total Duration, Peak Activity Window
-
         summary_rows = []
         for (idx, desc), grp in df_trans.groupby(['alarm_index', 'description']):
             freq = len(grp)
             total_dur = grp['duration_sec'].sum()
             avg_dur = total_dur / freq if freq > 0 else 0
 
-            # Peak Activity Window (Hourly)
             grp_time = grp.set_index('start_ts')
             if not grp_time.empty:
                 hourly_counts = grp_time.resample('h').size()
@@ -479,7 +454,7 @@ def get_transient_faults(crane_id, start_date, end_date, db_path, whitelist_indi
                 'alarm_index': idx,
                 'description': desc,
                 'frequency': freq,
-                'avg_duration_sec': round(avg_dur, 3),  # Precision for chatter
+                'avg_duration_sec': round(avg_dur, 3),
                 'total_duration_sec': round(total_dur, 2),
                 'peak_activity': peak_str,
                 'is_whitelisted': grp['is_whitelisted'].iloc[0]
@@ -554,7 +529,7 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
     dcc.Store(id='session-store'),
     dcc.Store(id='details-store'),
     dcc.Store(id='moves-store'),
-    dcc.Store(id='transient-raw-store'),  # Store raw timeseries for graphing
+    dcc.Store(id='transient-raw-store'),
     dcc.Store(id='current-db-path', data=DEFAULT_DB_PATH),
     dcc.Store(id='whitelist-data-store', data=load_default_whitelist()),
     dcc.Store(id='target-session-store'),
@@ -640,9 +615,102 @@ app.layout = html.Div(style={'fontFamily': 'Segoe UI, Arial', 'backgroundColor':
             ]))
         ]),
 
-        # TAB 2: TRANSIENT ANALYSIS
-        dcc.Tab(label='Transient Analysis (Predictive)', value='tab-transient', children=[
+        # TAB 2: INSIGHTS (Formerly Transient)
+        dcc.Tab(label='Insights & Predictive', value='tab-insights', children=[
             dcc.Loading(id="loading-transient", type="default", color="#1e293b", children=html.Div(style={'padding': '20px', 'minHeight': '800px'}, children=[
+
+                # --- NEW INSIGHTS SECTION (Actionable Tables) ---
+                html.Div(style={'marginBottom': '30px'}, children=[
+                    html.H2("Maintenance Strategy Insights", style={
+                            'color': '#1e293b', 'marginTop': 0}),
+                    html.Div(style={'display': 'flex', 'gap': '20px'}, children=[
+                        # Table 1: Nuisance Alarms (High Frequency, Zero Stops)
+                        html.Div(style={'flex': 1, 'backgroundColor': 'white', 'padding': '20px', 'borderRadius': '8px', 'boxShadow': '0 1px 3px rgba(0,0,0,0.1)'}, children=[
+                            html.H3("⚠️ Nuisance Alarms (High Chatter, No Stops)", style={
+                                    'fontSize': '16px', 'fontWeight': 'bold', 'color': '#d97706'}),
+                            html.P("Frequent alarms that almost never result in maintenance.", style={
+                                   'fontSize': '12px', 'color': '#64748b'}),
+
+                            # NEW: Nuisance Toggle
+                            html.Div(style={'marginBottom': '10px'}, children=[
+                                html.Label("Filter:", style={
+                                           'fontSize': '12px', 'fontWeight': 'bold', 'marginRight': '5px'}),
+                                dcc.RadioItems(id='nuisance-scope-toggle',
+                                               options=[{'label': ' All', 'value': 'ALL'}, {
+                                                   'label': ' Whitelist', 'value': 'WL'}],
+                                               value='WL', inline=True, style={'fontSize': '12px', 'display': 'inline-block'})
+                            ]),
+
+                            dash_table.DataTable(
+                                id='nuisance-table',
+                                sort_action="native",
+                                page_size=10,
+                                style_header={
+                                    'backgroundColor': '#f59e0b', 'color': 'white', 'fontWeight': 'bold'},
+                                style_cell={'textAlign': 'left', 'fontSize': '11px',
+                                            'padding': '8px', 'whiteSpace': 'normal', 'height': 'auto'},
+                                style_data_conditional=[
+                                    {
+                                        'if': {'filter_query': '{is_whitelisted} eq "True"'},
+                                        'fontWeight': 'bold',
+                                        'fontStyle': 'italic',
+                                        'color': '#0369a1'
+                                    }
+                                ],
+                                columns=[
+                                    {"name": "Idx", "id": "alarm_index"},
+                                    {"name": "Description", "id": "description"},
+                                    {"name": "Freq", "id": "frequency"},
+                                    {"name": "Avg Clear Time (sec)",
+                                     "id": "avg_duration_sec"}
+                                ]
+                            )
+                        ]),
+                        # Table 2: Critical Failures (Major Stops)
+                        html.Div(style={'flex': 1, 'backgroundColor': 'white', 'padding': '20px', 'borderRadius': '8px', 'boxShadow': '0 1px 3px rgba(0,0,0,0.1)'}, children=[
+                            html.H3("🛑 Critical Failures (Major Stops)", style={
+                                    'fontSize': '16px', 'fontWeight': 'bold', 'color': '#dc2626'}),
+                            html.P("Top faults that certainly result in downtime (From Internal Fault Analysis).", style={
+                                   'fontSize': '12px', 'color': '#64748b'}),
+
+                            # NEW: Critical Toggle
+                            html.Div(style={'marginBottom': '10px'}, children=[
+                                html.Label("Filter:", style={
+                                           'fontSize': '12px', 'fontWeight': 'bold', 'marginRight': '5px'}),
+                                dcc.RadioItems(id='critical-scope-toggle',
+                                               options=[{'label': ' All', 'value': 'ALL'}, {
+                                                   'label': ' Whitelist', 'value': 'WL'}],
+                                               value='WL', inline=True, style={'fontSize': '12px', 'display': 'inline-block'})
+                            ]),
+
+                            dash_table.DataTable(
+                                id='critical-table',
+                                sort_action="native",
+                                page_size=10,
+                                style_header={
+                                    'backgroundColor': '#ef4444', 'color': 'white', 'fontWeight': 'bold'},
+                                style_cell={'textAlign': 'left', 'fontSize': '11px',
+                                            'padding': '8px', 'whiteSpace': 'normal', 'height': 'auto'},
+                                style_data_conditional=[
+                                    {
+                                        'if': {'filter_query': '{is_whitelisted} eq "True"'},
+                                        'fontWeight': 'bold',
+                                        'fontStyle': 'italic',
+                                        'color': '#0369a1'
+                                    }
+                                ],
+                                columns=[
+                                    {"name": "Idx", "id": "alarm_index"},
+                                    {"name": "Description", "id": "description"},
+                                    {"name": "Frequency", "id": "frequency"},
+                                    {"name": "Sessions", "id": "sessions"}
+                                ]
+                            )
+                        ])
+                    ])
+                ]),
+
+                # --- ORIGINAL TRANSIENT SECTION ---
                 html.Div(style={'backgroundColor': 'white', 'padding': '20px', 'borderRadius': '8px', 'boxShadow': '0 1px 3px rgba(0,0,0,0.1)', 'marginBottom': '20px'}, children=[
                     html.H2("Ghost Fault & Chatter Detector", style={
                             'color': '#1e293b', 'marginTop': 0}),
@@ -862,25 +930,30 @@ def sync_and_save_mmbf(ts, detail_data, selected_rows, current_table, session_st
     mmbf_val = f"{(mmbf_count / (total_moves / 1000)):.2f}" if total_moves > 0 else "0.00"
     return session_store, mmbf_val, str(mmbf_count)
 
-# --- TRANSIENT ANALYSIS CALLBACKS ---
+# --- INSIGHTS & TRANSIENT CALLBACKS ---
 
 
 @app.callback(
-    [Output('transient-table', 'data'), Output('transient-raw-store', 'data')],
-    [Input('tabs-main', 'value'), Input('transient-scope-toggle', 'value'), Input('crane-selector',
-                                                                                  'value'), Input('date-picker', 'start_date'), Input('date-picker', 'end_date')],
-    [State('current-db-path', 'data'), State('whitelist-data-store', 'data')]
+    [Output('transient-table', 'data'), Output('transient-raw-store', 'data'),
+     Output('nuisance-table', 'data'), Output('critical-table', 'data')],
+    [Input('tabs-main', 'value'),
+     Input('transient-scope-toggle', 'value'),
+     Input('nuisance-scope-toggle', 'value'),
+     Input('critical-scope-toggle', 'value'),
+     Input('crane-selector', 'value'), Input('date-picker', 'start_date'), Input('date-picker', 'end_date')],
+    [State('current-db-path', 'data'), State('whitelist-data-store', 'data'),
+     State('session-store', 'data'), State('details-store', 'data')]
 )
-def update_transient_tab_data(tab, scope, crane_id, start, end, db_path, whitelist_data):
-    if tab != 'tab-transient':
-        return dash.no_update, dash.no_update
+def update_insights_tab_data(tab, trans_scope, nuis_scope, crit_scope, crane_id, start, end, db_path, whitelist_data, session_data, details_data):
+    if tab != 'tab-insights':
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
     whitelist_indices = {int(x['alarm_index'])
                          for x in whitelist_data} if whitelist_data else set()
-    only_whitelist = (scope == 'WL')
 
+    # We fetch ALL data initially to support independent filtering
     summary_df, raw_df = get_transient_faults(
-        crane_id, start, end, db_path, whitelist_indices, only_whitelist)
+        crane_id, start, end, db_path, whitelist_indices, only_whitelist=False)
 
     # Store raw data for graphing, but serialize timestamps to strings for JSON
     raw_records = []
@@ -889,7 +962,84 @@ def update_transient_tab_data(tab, scope, crane_id, start, end, db_path, whiteli
         df_store['start_ts'] = df_store['start_ts'].astype(str)
         raw_records = df_store.to_dict('records')
 
-    return summary_df.to_dict('records') if not summary_df.empty else [], raw_records
+    # --- INSIGHTS GENERATION ---
+
+    # 1. Critical Failures (Aggregation from Details Store - "Internal Fault Analysis")
+    # Iterate through all sessions in details-store and collect faults
+    critical_rows = []
+    if details_data:
+        for sid, faults in details_data.items():
+            for f in faults:
+                critical_rows.append({
+                    'alarm_index': f['alarm_index'],
+                    'description': f['description'],
+                    'session_id': int(sid),
+                    'is_whitelisted': f.get('is_whitelisted', 'False')
+                })
+
+    df_crit = pd.DataFrame(critical_rows)
+    critical_table_data = []
+
+    if not df_crit.empty:
+        # Group by Index/Desc/Whitelist Status
+        # Aggregations: Frequency (Unique Sessions), List of Session IDs
+        grp = df_crit.groupby(['alarm_index', 'description', 'is_whitelisted'])
+        for (idx, desc, wl), g in grp:
+            sessions = sorted(g['session_id'].unique())
+            freq = len(sessions)
+            critical_table_data.append({
+                'alarm_index': idx,
+                'description': desc,
+                'frequency': freq,
+                'sessions': ", ".join(map(str, sessions)),
+                'is_whitelisted': wl
+            })
+
+        # Sort by frequency desc
+        critical_table_data.sort(key=lambda x: x['frequency'], reverse=True)
+
+    # 2. Nuisance Data (Chatter - Stops)
+    nuisance_data = []
+    chatter_counts = pd.DataFrame()
+
+    # Helper to check if alarm is critical
+    critical_map = {row['alarm_index']: row['frequency']
+                    for row in critical_table_data}
+
+    if not summary_df.empty:
+        chatter_counts = summary_df[['alarm_index', 'description',
+                                     'frequency', 'avg_duration_sec', 'is_whitelisted']].copy()
+
+        # Calculate Stop Count based on Critical Data
+        chatter_counts['stop_count'] = chatter_counts['alarm_index'].map(
+            critical_map).fillna(0)
+
+        # Filter: High Chatter AND Zero (or very low) Stops
+        nuisance_df = chatter_counts[chatter_counts['stop_count'] == 0].copy()
+        nuisance_df = nuisance_df.sort_values('frequency', ascending=False)
+
+        nuisance_data = nuisance_df.to_dict('records')
+
+    # --- FILTERING OUTPUTS ---
+
+    # Filter Nuisance Table
+    if nuis_scope == 'WL':
+        nuisance_data = [row for row in nuisance_data if row.get(
+            'is_whitelisted') == 'True']
+
+    # Filter Critical Table
+    if crit_scope == 'WL':
+        critical_table_data = [
+            row for row in critical_table_data if row.get('is_whitelisted') == 'True']
+
+    # Filter Transient Table (summary_df)
+    transient_data = summary_df.to_dict(
+        'records') if not summary_df.empty else []
+    if trans_scope == 'WL':
+        transient_data = [row for row in transient_data if row.get(
+            'is_whitelisted') == 'True']
+
+    return transient_data, raw_records, nuisance_data, critical_table_data
 
 
 @app.callback(
