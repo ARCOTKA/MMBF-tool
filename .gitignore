@@ -1,3 +1,4 @@
+# --- Data Files ---
 # Ignore large data files
 *.csv
 *.duckdb
@@ -6,10 +7,17 @@
 # EXCEPTION: Explicitly track the whitelist file
 !MMbf_whitelist.csv
 
-# --- NEW ADDITIONS ---
+# --- Environment & Scripts ---
 # Ignore Python bytecode
 __pycache__/
 
+# Ignore virtual environments
+venv/
+
+# Ignore local batch scripts
+run_mmbf_tool.bat
+
+# --- Project Specifics ---
 # Ignore specific test file
 test.py
 
